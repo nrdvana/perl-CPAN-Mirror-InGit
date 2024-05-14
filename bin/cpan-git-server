@@ -24,11 +24,11 @@ get '/:branch/*filepath' => sub ($c) {
    my $path= $c->param('filepath');
    say "Serve branch $branch path $path";
    my $snapshot= $gitmirror->snapshot($branch);
-   my $fh= $snapshot->open_file($path);
+   my $blob= $snapshot->get_blob($path);
    my ($basename)= ($path =~ m,([^/]+)$,);
    $c->res->code(200);
    $c->res->headers->content_disposition("attachment; filename=$basename;");
-   $c->render(data => $fh);
+   $c->render(data => $blob->content);
    #$c->res->body($fh);
 };
 
