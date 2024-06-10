@@ -5,19 +5,67 @@ use Carp;
 use Moo;
 use v5.36;
 
+=head1 SYNOPSIS
+
+  my $gitmirror= CPAN::Mirror::InGit->new(repo => $path_to_git_repo);
+  my $snapshot= $gitmirror->snapshot($git_branch_name);
+  # (all interesting methods are found on Snapshot objects)
+
+=head1 DESCRIPTION
+
+This is the root object for providing access to CPAN mirror file trees stored in branches of a
+Git repository.  It also provides access to a special branch that holds the cache of all
+downloaded CPAN author tarballs from any branch.
+
+=head1 ATTRIBUTES
+
+=head2 repo
+
+An instance of L<Git::Raw::Repository> (which wraps libgit.so) for accessing the git structures.
+You can pass this attribute to the constructor as a simple directory path which gets inflated
+to a Repository object.
+
+=head2 upstream_mirror
+
+The URL of the upstream CPAN mirror, from which packages will be fetched.
+
+=head2 package_cache_branch_name
+
+The git branch name used for holding package files.  This prevents files from getting fetched
+multiple times as they are pulled into other branches.
+
+=head2 git_author_name
+
+Name used for commits by library.  Defaults to 'CPAN::Mirror::InGit'
+
+=head2 git_author_email
+
+Email used for commits by library.  Defaults to 'CPAN::Mirror::InGit@localhost'
+
+=cut
+
 has repo => ( is => 'ro', required => 1, coerce => \&_open_repo );
 has upstream_mirror => ( is => 'ro', required => 1, default => 'https://www.cpan.org/' );
 has package_cache_branch_name => ( is => 'ro', default => 'package-cache' );
-has snapshots => ( is => 'rw' );
-
-sub signature {
-   Git::Raw::Signature->now("CPAN::Mirror::InGit", 'CPAN::Mirror::InGit@localhost');
-}
+has git_author_name => ( is => 'rw', default => 'CPAN::Mirror::InGit' );
+has git_author_email => ( is => 'rw', default => 'CPAN::Mirror::InGit@localhost' );
+has _snapshot_cache => ( is => 'rw' );
 
 sub _open_repo($thing) {
    return $thing if blessed($thing) && $thing->isa('Git::Raw::Repository');
    return Git::Raw::Repository->open("$thing");
 }
+
+=head1 METHODS
+
+=head2 snapshot
+
+  $snapshot= $gitmirror->snapshot($branch_or_tag_or_id);
+
+Return a snapshot for the given branch name, git tag, or Git commit hash.  This may return a
+cached object.
+
+=cut
 
 sub snapshot($self, $branch_or_tag_or_id) {
    my ($tree, $origin)= $self->lookup_tree($branch_or_tag_or_id);
@@ -25,7 +73,7 @@ sub snapshot($self, $branch_or_tag_or_id) {
       Carp::confess();
    }
    if ($origin && ref $origin eq 'Git::Raw::Branch') {
-      return $self->{snapshots}{$origin->name} //= 
+      return $self->{_snapshot_cache}{$origin->name} //= 
          CPAN::Mirror::InGit::Snapshot->new(
             parent => $self,
             branch => $origin,
@@ -39,13 +87,20 @@ sub snapshot($self, $branch_or_tag_or_id) {
    }
 }
 
+=head2 package_cache
+
+Return the Snapshot object for the package-cache git branch (or name specified in
+L</package_cache_branch_name>).  This creates the git branch if it doesn't already exist.
+
+=cut
+
 sub package_cache($self) {
    my $branch= Git::Raw::Branch->lookup($self->repo, $self->package_cache_branch_name, 1);
    if (!$branch) {
       # Create an empty directory
       my $empty_dir= Git::Raw::Tree::Builder->new($self->repo)->write
          or croak;
-      my $signature= $self->signature
+      my $signature= $self->new_signature
          or croak;
       # Wrap it with an initial commit
       my $commit= Git::Raw::Commit->create($self->repo, "Initial empty tree", $signature, $signature,
@@ -57,6 +112,14 @@ sub package_cache($self) {
    }
    return $self->snapshot($branch);
 }
+
+=head2 lookup_tree
+
+Return the L<Git::Raw::Tree> object for the given branch name, git tag, or commit hash.
+Returns undef if not found.  In list context, it returns both the tree and the origin object
+(commit, branch, or tag) for that tree.  This does not use the Snapshot cache.
+
+=cut
 
 sub lookup_tree($self, $branch_or_tag_or_id) {
    my ($tree, $origin);
@@ -84,6 +147,18 @@ sub lookup_tree($self, $branch_or_tag_or_id) {
       }
    }
    return wantarray? ($tree, $origin) : $tree;
+}
+
+=head2 new_signature
+
+Returns a L<Git::Raw::Signature> that will be used for commits authored by this module.
+Signatures contain a timestamp, so the library generates new signatures frequently during
+operation.
+
+=cut
+
+sub new_signature($self) {
+   Git::Raw::Signature->now($self->git_author_name, $self->git_author_email);
 }
 
 package CPAN::Mirror::InGit::Snapshot {
@@ -182,7 +257,7 @@ package CPAN::Mirror::InGit::Snapshot {
       # remove from global list
       delete $pending_commits{refaddr $self};
       my $tree= _assemble_tree($self->repo, $self->tree, $pending_commit->{changes});
-      my $sig= $self->parent->signature;
+      my $sig= $self->parent->new_signature;
       my $msg= join "\n",
          "Added $pending_commit->{packages_added} dists",
          "",
