@@ -9,13 +9,13 @@ use v5.36;
 
 =head1 SYNOPSIS
 
-  my $gitmirror= CPAN::Mirror::InGit->new(repo => $path_to_git_repo);
-  my $snapshot= $gitmirror->snapshot($git_branch_name);
-  # (all interesting methods are found on Snapshot objects)
+  my $cpan_repo= CPAN::Mirror::InGit->new(repo => $path_to_git_repo);
+  my $mirror= $cpan_repo->mirror($git_branch_name);
+  # (all interesting methods are found on Mirror objects)
 
 =head1 DESCRIPTION
 
-CPAN::Mirror::InGit is a concept that your entire CPAN mirror (or maybe more correctly a
+C<CPAN::Mirror::InGit> is a concept that your entire CPAN mirror (or maybe more correctly a
 DarkPAN) lives within a Git repository.  You designate a branch for each of your perl
 environments (such as one branch per application) and that branch contains B<ONLY> the dist
 tarballs used by that project, and an index of the packages within.
@@ -63,7 +63,7 @@ your environment for each application.
 
 =head2 repo
 
-An instance of L<Git::Raw::Repository> (which wraps libgit.so) for accessing the git structures.
+An instance of L<Git::Raw::Repository> (which wraps libgit2.so) for accessing the git structures.
 You can pass this attribute to the constructor as a simple directory path which gets inflated
 to a Repository object.
 
@@ -71,7 +71,7 @@ to a Repository object.
 
 The URL of the upstream CPAN mirror, from which packages will be fetched.
 
-=head2 package_cache_branch_name
+=head2 dist_cache_branch_name
 
 The git branch name used for holding package files.  This prevents files from getting fetched
 multiple times as they are pulled into other branches.
@@ -92,10 +92,15 @@ The L<Mojo::UserAgent> object used when downloading files from the real CPAN.
 
 has repo                      => ( is => 'ro', required => 1, coerce => \&_open_repo );
 has upstream_mirror           => ( is => 'ro', required => 1, default => 'https://www.cpan.org/' );
-has package_cache_branch_name => ( is => 'ro', default => 'package-cache' );
+has dist_cache_branch_name    => ( is => 'ro', default => 'dist-cache' );
 has git_author_name           => ( is => 'rw', default => 'CPAN::Mirror::InGit' );
 has git_author_email          => ( is => 'rw', default => 'CPAN::Mirror::InGit@localhost' );
-has _snapshot_cache           => ( is => 'rw' );
+
+has working_branch_name       => ( is => 'lazy' );
+sub _build_working_branch_name($self) {
+   return undef if $self->repo->is_bare || $self->repo->is_head_detached;
+   return $self->repo->head->shorthand;
+}
 
 has useragent                 => ( is => 'lazy' );
 sub _build_useragent($self) {
@@ -109,44 +114,39 @@ sub _open_repo($thing) {
 
 =head1 METHODS
 
-=head2 snapshot
+=head2 mirror
 
-  $snapshot= $gitmirror->snapshot($branch_or_tag_or_id);
+  $mirror= $cpan_repo->mirror($branch_or_tag_or_id);
 
-Return a snapshot for the given branch name, git tag, or Git commit hash.  This may return a
-cached object.
+Return a L<Mirror object|CPAN::Mirror::InGit::Mirror> for the given branch name, git tag, or
+commit hash.  This branch must look like a mirror (having modules/02packages.details.txt) or it
+will return C<undef>.
 
 =cut
 
-sub snapshot($self, $branch_or_tag_or_id) {
+sub mirror($self, $branch_or_tag_or_id) {
    my ($tree, $origin)= $self->lookup_tree($branch_or_tag_or_id);
-   if (blessed($branch_or_tag_or_id) && $branch_or_tag_or_id->isa('Git::Raw::Branch') && !$origin) {
-      Carp::confess("BUG");
-   }
-   if ($origin && ref $origin eq 'Git::Raw::Branch') {
-      return $self->{_snapshot_cache}{$origin->name} //= 
-         CPAN::Mirror::InGit::Snapshot->new(
-            parent => $self,
-            branch => $origin,
-            tree => $tree,
-         );
-   } else {
-      return CPAN::Mirror::InGit::Snapshot->new(
-         parent => $self,
-         tree => $tree,
-      );
-   }
+   # To be recognized as a mirror, the tree must contain modules/02packages.details.txt
+   return undef unless $tree && $tree->entry_bypath('modules/02packages.details.txt');
+   return CPAN::Mirror::InGit::Mirror->new(
+      parent => $self,
+      (branch => $origin)x!!$origin,
+      tree => $tree,
+   );
 }
 
-=head2 package_cache
+=head2 dist_cache
 
-Return the Snapshot object for the package-cache git branch (or name specified in
-L</package_cache_branch_name>).  This creates the git branch if it doesn't already exist.
+  $dists= $cpan_repo->dist_cache;
+
+Return the L<DistCache|CPAN::Mirror::InGit::DistCache> representing the C<'dist-cache'>
+git branch (or name specified in L</dist_cache_branch_name>).  This creates the git branch
+if it doesn't already exist.
 
 =cut
 
-sub package_cache($self) {
-   my $branch= Git::Raw::Branch->lookup($self->repo, $self->package_cache_branch_name, 1);
+sub dist_cache($self) {
+   my $branch= Git::Raw::Branch->lookup($self->repo, $self->dist_cache_branch_name, 1);
    if (!$branch) {
       # Create an empty directory
       my $empty_dir= Git::Raw::Tree::Builder->new($self->repo)->write
@@ -154,21 +154,24 @@ sub package_cache($self) {
       my $signature= $self->new_signature
          or croak;
       # Wrap it with an initial commit
-      my $commit= Git::Raw::Commit->create($self->repo, "Initial empty tree", $signature, $signature,
-         [], $empty_dir, 'refs/heads/'.$self->package_cache_branch_name)
-         or croak;
+      my $commit= Git::Raw::Commit->create($self->repo, "Initial empty package cache",
+         $signature, $signature, [], $empty_dir, 'refs/heads/'.$self->dist_cache_branch_name)
+         or croak "Failed to create package cache initial commit";
       # Create the branch
-      #$branch= Git::Raw::Branch->create($self->repo, $self->package_cache_branch_name, $commit)
-      #   or croak;
+      $branch= Git::Raw::Branch->create($self->repo, $self->dist_cache_branch_name, $commit)
+         or croak 'Failed to create branch '.$self->dist_cache_branch_name;
    }
-   return $self->snapshot($branch);
+   return CPAN::Mirror::InGit::DistCache->new(parent => $self, branch => $branch);
 }
 
 =head2 lookup_tree
 
+  $tree= $cpan_repo->lookup_tree($branch_or_tag_or_commit);
+  ($tree, $origin)= $cpan_repo->lookup_tree($branch_or_tag_or_commit);
+
 Return the L<Git::Raw::Tree> object for the given branch name, git tag, or commit hash.
-Returns undef if not found.  In list context, it returns both the tree and the origin object
-(commit, branch, or tag) for that tree.  This does not use the Snapshot cache.
+Returns C<undef> if not found.  In list context, it returns both the tree and the origin object
+(commit, branch, or tag) for that tree.
 
 =cut
 
@@ -285,7 +288,7 @@ cache.
 sub get_dist_index {
    ...
    # If git obj or sha1 provided
-   #    look for cache at ->package_cache->get_blob("index_cache/$sha1")
+   #    look for cache at ->dist_cache->get_blob("index_cache/$sha1")
    #    return cache if found
    #    extract to a tar.gz tmp file
    # extract tarball path to a tmpdir

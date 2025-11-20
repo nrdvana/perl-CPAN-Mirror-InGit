@@ -1,0 +1,104 @@
+#! /usr/bin/env perl
+use v5.36;
+use FindBin;
+BEGIN { push @INC, "$FindBin::RealBin/../lib" if -f "$FindBin::RealBin/../dist.ini" }
+use Cwd;
+use CPAN::Mirror::InGit;
+use Git::Raw::Branch;
+use Getopt::Long;
+use Pod::Usage;
+
+=head1 USAGE
+
+  cpangit-add [OPTIONS] MODULE::NAME VERSION
+  cpangit-add [OPTIONS] ./PATH/TO/CPANFILE
+
+Add one or more modules, and their dependencies, to a mirror branch.  This will add the files
+to the index, and you can then review and commit them.
+
+A name with "/" or "\\" in it will be treated as a cpanfile.  A name without will be treated as
+the name of a perl module to fetch from upstream.
+
+=head1 OPTIONS
+
+=over
+
+=item --repo=PATH
+
+Path to the Git repository of L<CPAN::Mirror::InGit>.  Uses the C<.git> dir at or above the
+current directory by default.
+
+=item --branch=BRANCH_NAME
+
+Branch name to commit the changes to.  If this is the checked-out branch, the index will be
+updated but no commit will be generated.
+
+=item --upstream=BRANCH_OR_URL
+
+The URL of the upstream CPAN mirror.  This can be given multiple times to check different
+cpan mirror git branches for your package before going upstream further.
+
+=cut
+
+GetOptions(
+   'repo=s'     => \my $repo_path,
+   'branch=s'   => \my $branch_name,
+   'upstream=s' => \my @upstream,
+   'help'       => sub { pod2usage(1) },
+) && @ARGV or pod2usage(2);
+
+$repo_path //= getcwd;
+unless (-d $repo_path && -d "$repo_path/objects" && -f "$repo_path/config") {
+   # walk up directories until we find ".git"
+   my $path= $repo_path;
+   while (length $path && !-d "$path/.git") {
+      $path =~ s,[^/]+\z,,;
+      $path =~ s,/\z,,;
+   }
+   length $path
+      or die "$repo_path does not appear to be a git dir, and no parent contains '.git'";
+}
+
+my $cpan_repo= CPAN::Mirror::InGit->new(
+   repo => $repo_path,
+   upstream_mirror => \@upstream,
+);
+Git::Raw::Branch->lookup($cpan_repo->repo, $cpan_repo->dist_cache_branch_name, 1)
+   or die "Repo at $repo_path does not appear to be used by CPAN::Mirror::InGit"
+         ." (missing branch ".$cpan_repo->dist_cache_branch_name.")";
+
+# If branch name is not provided, use the working copy.  But there must be a working copy.
+# and if the branch name is the same as the one checked out, we need to modify the working
+# copy instead of the branch itself.
+my $cur_branch= $cpan_repo->working_branch_name;
+die "Must specify --branch-name=X for bare git repo"
+   unless length $branch_name || length $cur_branch;
+
+my $cpan_tree= !length $branch_name || ($cur_branch//'') eq $branch_name
+             ? $cpan_repo->working_cpan_tree
+             : $cpan_repo->cpan_tree($branch_name);
+
+my %requirements;
+
+while (@ARGV) {
+   if ($ARGV[0] =~ m,/,) {
+      die "cpanfile not supported yet";
+   }
+   elsif ($ARGV[0] =~ /^\w+(::\w+)*\z/) {
+      my $mod_name= shift;
+      my $ver_spec;
+      if ($ARGV[0] =~ /^[><=0-9]/) {
+         $ver_spec= shift;
+         ($ver_spec =~ /^(>|>=|=|<|<=|)([0-9]+(?:\.[0-9]+(?:_[0-9]+)*))\z/)
+            or die "Unexpected version syntax '$ver_spec'";
+      }
+      if (defined $requirements{$mod_name} && defined $ver_spec) {
+         $requirements{$mod_name} eq $ver_spec
+            or die "Conflicting versions requested for $mod_name: $ver_spec vs $requirements{$mod_name}";
+      }
+      $requirements{$mod_name} //= $ver_spec;
+   }
+}
+
+$cpan_tree->add_modules(\%requirements);
+...
