@@ -1,5 +1,6 @@
 package CPAN::Mirror::InGit;
 use Git::Raw::Repository;
+use Archive::Tar::Constant; # for constants to be avilable at compile time
 use Scalar::Util 'blessed';
 use Parse::LocalDistribution;
 use Carp;
@@ -120,7 +121,7 @@ cached object.
 sub snapshot($self, $branch_or_tag_or_id) {
    my ($tree, $origin)= $self->lookup_tree($branch_or_tag_or_id);
    if (blessed($branch_or_tag_or_id) && $branch_or_tag_or_id->isa('Git::Raw::Branch') && !$origin) {
-      Carp::confess();
+      Carp::confess("BUG");
    }
    if ($origin && ref $origin eq 'Git::Raw::Branch') {
       return $self->{_snapshot_cache}{$origin->name} //= 
@@ -197,6 +198,62 @@ sub lookup_tree($self, $branch_or_tag_or_id) {
       }
    }
    return wantarray? ($tree, $origin) : $tree;
+}
+
+=head2 add_git_tree_to_tar
+
+  $mirrorInGit->add_git_tree_to_tar($tar, $path, $tree);
+
+This utility function adds L<Git trees|Git::Raw::Tree> to a L<tar archve|Archive::Tar>,
+calling L</add_git_dirent_to_tar> for each entry.  C<$path> provides the name for the root
+of the tree within the archive.  C<undef> or empty string means the tree I<will be> the root of
+the archive.
+
+=head2 add_git_dirent_to_tar
+
+  $mirrorInGit->add_git_dirent_to_tar($tar, $path, $dirent);
+
+This utility function adds L<Git directory entries|Git::Raw::Tree::Entry> to a
+L<tar archve|Archive::Tar>.  It recurses subdirectories and handles symlinks.
+The C<$path> is used for the destination name instead of C<< $dirent->name >>.
+
+=cut
+
+sub add_git_tree_to_tar($self, $tar, $path, $tree) {
+   unless ($tree->can('entries')) {
+      my $id= $tree;
+      $tree = Git::Raw::Tree->lookup($self->repo, $id)
+         or die "Can't find TREE $id referenced by '$path'";
+   }
+   $self->add_git_dirent_to_tar($tar, "$path/".$_->name, $_)
+      for $tree->entries;
+}
+
+sub add_git_dirent_to_tar($self, $tar, $path, $dirent) {
+   if ($dirent->type == Git::Raw::Object::BLOB()) {
+      my $mode = $dirent->file_mode;
+      my $blob = Git::Raw::Blob->lookup($self->repo, $dirent->id)
+         or die "Can't find BLOB ".$dirent->id." referenced by '$path'";
+      # Check if it's a symlink (mode 0120000 or 40960 decimal)
+      if (($mode & 0170000) == 0120000) {
+         # Symlink: content is the target path
+         $tar->add_data($path, $blob->content, { 
+            mode => $mode,
+            type => Archive::Tar::Constant::SYMLINK,
+            linkname => $blob->content
+         });
+      }
+      else {
+         # Regular file
+         $tar->add_data($path, $blob->content, { mode => $mode });
+      }
+   }
+   elsif ($dirent->type == Git::Raw::Object::TREE()) {
+      $self->add_git_tree_to_tar($tar, $path, $dirent->id);
+   }
+   else {
+      warn "Omitting $path from TAR, not a BLOB or TREE";
+   }
 }
 
 =head2 new_signature
