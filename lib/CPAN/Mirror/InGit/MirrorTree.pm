@@ -1,4 +1,13 @@
-package CPAN::Mirror::InGit::Snapshot;
+package CPAN::Mirror::InGit::MirrorTree;
+# VERSION
+# ABSTRACT: An object managing a CPAN Mirror file structure in a Git Tree
+
+=head1 SYNOPSIS
+
+  my $mirror= CPAN::Mirror::InGit::MirrorTree->new($
+
+=cut
+
 use Carp;
 use Moo;
 use PerlIO::gzip;

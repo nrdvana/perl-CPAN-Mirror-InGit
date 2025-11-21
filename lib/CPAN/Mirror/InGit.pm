@@ -10,7 +10,7 @@ use v5.36;
 =head1 SYNOPSIS
 
   my $cpan_repo= CPAN::Mirror::InGit->new(repo => $path_to_git_repo);
-  my $mirror= $cpan_repo->mirror($git_branch_name);
+  my $mirror_tree= $cpan_repo->branch_mirror($git_branch_name);
   # (all interesting methods are found on Mirror objects)
 
 =head1 DESCRIPTION
@@ -96,8 +96,8 @@ has dist_cache_branch_name    => ( is => 'ro', default => 'dist-cache' );
 has git_author_name           => ( is => 'rw', default => 'CPAN::Mirror::InGit' );
 has git_author_email          => ( is => 'rw', default => 'CPAN::Mirror::InGit@localhost' );
 
-has working_branch_name       => ( is => 'lazy' );
-sub _build_working_branch_name($self) {
+has workdir_branch_name       => ( is => 'lazy' );
+sub _build_workdir_branch_name($self) {
    return undef if $self->repo->is_bare || $self->repo->is_head_detached;
    return $self->repo->head->shorthand;
 }
@@ -116,24 +116,42 @@ sub _open_repo($thing) {
 
 =head2 mirror
 
-  $mirror= $cpan_repo->mirror($branch_or_tag_or_id);
+  $mirror= $cpan_repo->mirror($branch_or_tag_or_id, $create=0);
 
-Return a L<Mirror object|CPAN::Mirror::InGit::Mirror> for the given branch name, git tag, or
-commit hash.  This branch must look like a mirror (having modules/02packages.details.txt) or it
-will return C<undef>.
+Return a L<MirrorTree object|CPAN::Mirror::InGit::MirrorTree> for the given
+branch name, git tag, or commit hash.  This branch must look like a mirror
+(having modules/02packages.details.txt) or it will return C<undef>, unless you
+specify C<$create>, in which case the branch will be fleshed out with the
+necessary files.  If C<$create> is specified, the C<$branch_or_tag_or_id> must
+be a branch name or L<Git::Raw::Branch> object.
 
 =cut
 
-sub mirror($self, $branch_or_tag_or_id) {
+sub mirror($self, $branch_or_tag_or_id, $create=0) {
    my ($tree, $origin)= $self->lookup_tree($branch_or_tag_or_id);
+   unless ($tree && $tree->entry_bypath('modules/02packages.details.txt')) {
+      return undef unless $create;
+      if (!$tree) {
+         
+      
    # To be recognized as a mirror, the tree must contain modules/02packages.details.txt
-   return undef unless $tree && $tree->entry_bypath('modules/02packages.details.txt');
-   return CPAN::Mirror::InGit::Mirror->new(
+   return undef unless $tree && ($create );
+   # Setting the branch attribute lets the MirrorTree apply updates to the
+   # branch.  If this is created from a tag or commit hash, there is no branch
+   # to be updated.
+   my $branch= $origin->isa('Git::Raw::Branch')? $origin : undef;
+   return CPAN::Mirror::InGit::MirrorTree->new(
       parent => $self,
-      (branch => $origin)x!!$origin,
+      (branch => $origin)x!!($origin && $origin->isa('Git::Raw::Branch'))
       tree => $tree,
    );
 }
+
+=head2 create_mirror
+
+  $mirror= $cpan_repo->create_mirror($branch_name);
+
+
 
 =head2 dist_cache
 
@@ -162,6 +180,10 @@ sub dist_cache($self) {
          or croak 'Failed to create branch '.$self->dist_cache_branch_name;
    }
    return CPAN::Mirror::InGit::DistCache->new(parent => $self, branch => $branch);
+}
+
+sub has_dist_cache($self) {
+   return !!Git::Raw::Branch->lookup($self->repo, $self->dist_cache_branch_name, 1);
 }
 
 =head2 lookup_tree
