@@ -76,8 +76,10 @@ my $cur_branch= $cpan_repo->workdir_branch_name;
 say "cur_branch=$cur_branch";
 die "Must specify --branch-name=X for bare git repo"
    unless length $branch_name || length $cur_branch;
+$branch_name //= $cur_branch;
 
-my $cpan_tree= $cpan_repo->mirror($branch_name, $create);
+my $mirror= $cpan_repo->mirror($branch_name, $create)
+   or die "No mirror named '$branch_name' and --create not requested";
 
 my %requirements;
 
@@ -101,5 +103,5 @@ while (@ARGV) {
    }
 }
 
-$cpan_tree->add_modules(\%requirements);
+$mirror->import_modules(\%requirements);
 ...

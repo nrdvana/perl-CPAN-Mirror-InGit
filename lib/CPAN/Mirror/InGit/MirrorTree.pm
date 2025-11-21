@@ -10,59 +10,107 @@ package CPAN::Mirror::InGit::MirrorTree;
 
 use Carp;
 use Moo;
-use PerlIO::gzip;
 use Scalar::Util 'refaddr', 'blessed';
-use Mojo::IOLoop;
+use POSIX 'strftime';
 use v5.36;
 
-has parent            => ( is => 'ro', weak_ref => 1, required => 1 );
-has branch            => ( is => 'ro' );
-has tree              => ( is => 'ro', required => 1 );
-sub upstream_mirror      { shift->parent->upstream_mirror }
-sub repo                 { shift->parent->repo }
-has manifest_files    => ( is => 'lazy', clearer => 1, predicate => 1 );
-has manifest_packages => ( is => 'lazy', clearer => 1, predicate => 1 );
+sub _json {
+   state $json_class= eval { require Cpanel::JSON::XS; 'Cpanel::JSON::XS' }
+                   // eval { require JSON::XS; 'JSON::XS' }
+                   // do { require JSON::PP; 'JSON::PP' };
+   $json_class->new
+}
 
-sub _build_manifest_files($self) {
-   my $dirent= $self->tree->entry_bypath('modules/02packages.details.txt.gz')
-      or do { carp "modules/02packages.details.txt.gz not found"; return {} };
-   $dirent->type == Git::Raw::Object::BLOB()
-      or do { croak "modules/02packages.details.txt.gz is not a file"; return {} };
-   my $blob= Git::Raw::Blob->lookup($self->repo, $dirent->id);
-   my %files;
+extends 'CPAN::Mirror::InGit::MutableTree';
+
+has dist_meta       => ( is => 'lazy', clearer => 1, predicate => 1 );
+has module_manifest => ( is => 'rw' );
+
+sub _build_dist_meta($self) {
+   # Walk the tree looking for every author dist .json
+   ...
+}
+
+=method build_module_manifest
+
+Build attribute L</module_manifest> from the module/version data in each C<$DIST.json> file
+from attribute L</dist_meta>.
+
+=cut
+
+sub build_module_manifest {
+   ...
+}
+
+=method module_manifest_blob
+
+Returns the Blob of the C<modules/02packages.details.txt> file, or C<undef> if it doesn't exist.
+
+=cut
+
+sub module_manifest_blob($self) {
+   my $ent= $self->get_path('modules/02packages.details.txt')
+      or return undef;
+   return $ent->[0]->is_blob? $ent->[0] : undef;
+}
+
+=method load_module_manifest
+
+Parse C<< modules/02packages.details.txt.gz >> into attribute L</module_manifest>.
+
+=cut
+
+sub load_module_manifest($self) {
+   my $blob= $self->module_manifest_blob
+      or croak "Can't read modules/02packages.details.txt";
    my $content= $blob->content;
-   open my $fh, '<:gzip', \$content or die "open(<gzip): $!";
-   my %meta;
-   local $_;
-   while (defined($_= <$fh>) && /^([^:]+):\s+(.*)$/) {
-      $meta{$1}= $2;
+   my %manifest;
+   my %attrs;
+   while ($content =~ /\G([^:]+):\s+(.*)\n/gc) {
+      $attrs{$1}= $2;
    }
-   while (<$fh>) {
-      my ($pkg, $ver, $file)= split /\s+/;
-      $files{$file}{$pkg}= $ver if defined $file && defined $pkg;
+   $content =~ /\G\n/gc or croak "missing blank line after headers";
+   while ($content =~ /\G(\S+)\s+(\S+)\s+(\S+)\n/gc) {
+      my $ver= $2 eq 'undef'? undef : $2;
+      $manifest{$1}= { version => $ver, file => $3 };
    }
-   $fh->close;
-   undef $content;
-   \%files;
+   pos $content == length $content
+      or croak "Parse error at '".substr($content, pos($content), 10)."'";
+   $self->module_manifest(\%manifest);
+   \%manifest;
 }
 
-sub _build_manifest_packages($self) {
-   my %pkg;
-   my $files= $self->files;
-   for my $fname (keys $files->%*) {
-      $pkg{$_}= $fname for keys $files->{$fname}->%*;
-   }
-   \%pkg
-}
+=method save_module_manifest
 
-sub _build_uncommitted($self) {
-   return {};
+Write C<< modules/02packages.details.txt.gz >> from attribute L</module_manifest>.
+
+=cut
+
+sub save_module_manifest($self) {
+   my $url= 'http://www.cpan.org/modules/02packages.details.txt';
+   my $line_count= 9 + keys $self->module_manifest->%*;
+   my $date= strftime("%a, %d %b %Y %H:%M:%S GMT", gmtime);
+   my $content= <<~END;
+      File:         02packages.details.txt
+      URL:          $url
+      Description:  Package names found in directory \$CPAN/authors/id/
+      Columns:      package name, version, path
+      Intended-For: Automated fetch routines, namespace documentation.
+      Written-By:   PAUSE version 1.005
+      Line-Count:   $line_count
+      Last-Updated: $date
+      
+      END
+   for (sort keys $self->module_files->%*) {
+      $content .= sprintf("%s %s  %s\n", $_, $_->{version}, $_->{file});
+   }
+   $self->set_path('modules/02packages.details.txt', \$content);
 }
 
 =method import_dist
 
   $snapshot->import_dist($public_cpan_author_path);
-  $snapshot->import_dist($darkpan_path, $tarball_abs_path_or_git_obj);
+  $snapshot->import_dist($local_path, $tarball_abs_path_or_git_obj);
 
 This either fetches a public cpan module from the specified author path, or installs a given
 tarball at an author path exclusive to this DarkPAN.  When using a public path, this may pull
@@ -77,7 +125,7 @@ sub import_dist {
 
 =method patch_dist
 
-  $snapshot->patch_dist($darkpan_author_path, @patches);
+  $snapshot->patch_dist($local_path, @patches);
 
 This applies one or more patch files to a dist, which generates a new dist with a custom
 version.  It also records the status of this dist as being a patched version.
@@ -86,124 +134,6 @@ version.  It also records the status of this dist as being a patched version.
 
 sub patch_dist {
    ...
-}
-
-=method get_blob
-
-  $snapshot->get_blob($path);
-
-Return any file in this snapshot by path.  This is simply a traversal of the directory tree
-within the git repo.  It returns the Git::Raw::Blob object, or undef if not found or not a blob.
-
-=cut
-
-sub get_blob($self, $path) {
-   my $dirent= $self->tree->entry_bypath($path);
-   if ($dirent) {
-      if ($dirent->type != Git::Raw::Object::BLOB()) {
-         warn "'$path' is not a BLOB";
-         return undef;
-      }
-      warn "found blob '".$dirent->id."'";
-      return Git::Raw::Blob->lookup($self->repo, $dirent->id);
-   } elsif ($path =~ m,^authors/id/(.*), and $self->manifest_files->{$1}) {
-      warn "File '$path' should exist; not cached";
-      # Check the 'cache' branch for authors/id/*
-      my $package_cache= $self->parent->package_cache;
-      my $blob;
-      $blob= $package_cache->get_blob($path)
-         if $package_cache && $package_cache != $self;
-      if (!$blob) {
-         # Download from upstream
-         warn "Download from upstream";
-         my $tx= $self->useragent->get($self->upstream_mirror . $path)
-            or croak;
-         if (!$tx->result->is_success) {
-            warn "Failed to find file upstream: ".$tx->result->extract_start_line;
-            return undef;
-         }
-         $blob= Git::Raw::Blob->create($self->repo, $tx->result->body)
-            or croak;
-
-         # Add to the package cache branch
-         $package_cache->_delayed_commit($path => $blob)
-            if $package_cache && $package_cache != $self;
-      }
-      # If this is a writable branch, save this ref to commit later
-      $self->_delayed_commit($path => $blob)
-         if $self->branch;
-      return $blob;
-   } else {
-      warn "No found, not supposed to be cached";
-      return undef;
-   }
-}
-
-our %pending_commits;
-END {
-   my @todo= values %pending_commits;
-   _resolve_pending_commit($_->{snapshot}, $_->{timer_id}, 'Mojo::IOLoop')
-      for @todo;
-}
-
-sub _delayed_commit($self, $path, $blob, $delay=10) {
-   $self->branch or croak "Can't commit without a branch";
-   warn "Will commit changed path $path to branch ".$self->branch->name;
-   my $pending_commit= $pending_commits{refaddr $self} //= {
-         cpan_ingit => $self->parent,
-         snapshot => $self,
-         changes => {},
-         packages_added => 0,
-      };
-   Mojo::IOLoop->remove($pending_commit->{timer_id})
-      if defined $pending_commit->{timer_id};
-   my @parts= split '/', $path;
-   my $basename= pop @parts;
-   my $node= $pending_commit->{changes};
-   $node= $node->{$_} //= {} for @parts;
-   $node->{$basename}= $blob;
-   ++$pending_commit->{packages_added};
-   push $pending_commit->{distfiles}->@*, $1
-      if $path =~ m|author/id/(.*)|;
-   my $id;
-   $id= $pending_commit->{timer_id}= Mojo::IOLoop->timer($delay => sub($loop) {
-      _resolve_pending_commit($self, $id, $loop);
-   });
-}
-
-sub _resolve_pending_commit($self, $id, $loop) {
-   my $pending_commit= $pending_commits{refaddr $self};
-   $loop->remove($id);
-   # Ignore this callback if it isn't the most recent
-   return unless $id eq $pending_commit->{timer_id};
-   # remove from global list
-   delete $pending_commits{refaddr $self};
-   my $tree= _assemble_tree($self->repo, $self->tree, $pending_commit->{changes});
-   my $sig= $self->parent->new_signature;
-   my $msg= join "\n",
-      "Added $pending_commit->{packages_added} dists",
-      "",
-      map "  * $_", $pending_commit->{distfiles}->@*;
-   my $parent= [ $self->branch->peel('commit') ];
-   my $commit= Git::Raw::Commit->create($self->repo, $msg, $sig, $sig, $parent, $tree)
-      or croak;
-   # Update the branch
-   $self->branch->target($commit);
-   $self->branch->target->id eq $commit->id
-      or croak "Branch object didn't update";
-   $self->tree($tree);
-}
-sub _assemble_tree($repo, $tree, $changes) {
-   my $treebuilder= Git::Raw::Tree::Builder->new($repo, ($tree? ($tree) : ()));
-   for my $name (keys %$changes) {
-      my $dirent= $treebuilder->get($name);
-      if (ref $changes->{$name} eq 'HASH') {
-         my $subdir= $dirent && $dirent->type == Git::Raw::Object::TREE()? Git::Raw::Tree->lookup($repo, $dirent->id) : undef;
-         $changes->{$name}= _assemble_tree($repo, $subdir, $changes->{$name});
-      }
-      $treebuilder->insert($name, $changes->{$name}, $changes->{$name}->is_tree? 0040000 : 0100644);
-   }
-   return $treebuilder->write;
 }
 
 1;

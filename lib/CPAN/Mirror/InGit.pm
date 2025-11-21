@@ -3,6 +3,7 @@ use Git::Raw::Repository;
 use Archive::Tar::Constant; # for constants to be avilable at compile time
 use Scalar::Util 'blessed';
 use Parse::LocalDistribution;
+use CPAN::Mirror::InGit::MirrorTree;
 use Carp;
 use Moo;
 use v5.36;
@@ -127,24 +128,27 @@ be a branch name or L<Git::Raw::Branch> object.
 
 =cut
 
-sub mirror($self, $branch_or_tag_or_id, $create=0) {
-   my ($tree, $origin)= $self->lookup_tree($branch_or_tag_or_id);
-   unless ($tree && $tree->entry_bypath('modules/02packages.details.txt')) {
-      return undef unless $create;
-      if (!$tree) {
-         
-      
-   # To be recognized as a mirror, the tree must contain modules/02packages.details.txt
-   return undef unless $tree && ($create );
-   # Setting the branch attribute lets the MirrorTree apply updates to the
-   # branch.  If this is created from a tag or commit hash, there is no branch
-   # to be updated.
-   my $branch= $origin->isa('Git::Raw::Branch')? $origin : undef;
-   return CPAN::Mirror::InGit::MirrorTree->new(
+sub mirror($self, $branch_or_tag_or_id=undef, $create=0) {
+   my ($tree, $origin, $mirror);
+   if (defined $branch_or_tag_or_id) {
+      ($tree, $origin)= $self->lookup_tree($branch_or_tag_or_id);
+      return undef unless $tree or $create;
+   }
+   my $branch= $origin && ref($origin)->isa('Git::Raw::Branch')? $origin : undef;
+   # undefined, or the same branch pointed to by HEAD mean that it should use the working tree
+   my $use_workdir= !$self->repo->is_bare && (!defined $origin || ($branch && $branch->is_head));
+   $mirror= CPAN::Mirror::InGit::MirrorTree->new(
       parent => $self,
-      (branch => $origin)x!!($origin && $origin->isa('Git::Raw::Branch'))
       tree => $tree,
+      (branch => $branch)x!!$branch,
+      use_workdir => $use_workdir,
    );
+   # To be recognized as a mirror, the tree must contain modules/02packages.details.txt
+   unless ($mirror->module_manifest_blob) {
+      return undef unless $create;
+      $mirror->save_module_manifest;
+   }
+   return $mirror;
 }
 
 =head2 create_mirror
