@@ -107,19 +107,56 @@ sub save_module_manifest($self) {
    $self->set_path('modules/02packages.details.txt', \$content);
 }
 
-=method import_dist
+=method import_modules
 
-  $snapshot->import_dist($public_cpan_author_path);
-  $snapshot->import_dist($local_path, $tarball_abs_path_or_git_obj);
+  $snapshot->import_dist(\%module_version_spec);
+  # {
+  #   'Example::Module' => { version => '>=0.011' },
+  #   'Some::Module'    => {},   # any version
+  # }
 
-This either fetches a public cpan module from the specified author path, or installs a given
-tarball at an author path exclusive to this DarkPAN.  When using a public path, this may pull
-from cache within the Git repo, or download from a public mirror and cache the dist.  It then
-indexes the dist, and updates the index for this branch.
+This method processes a list of module requirements much like C<cpanm> would.  If the module is
+not available in the mirror, it looks in the distribution cache to see if you are already using
+a suitable version in another branch, and if so, uses that.  If not, it goes upstream to
+cpan.org and fetches the latest version of the module, and runs L<Parse::LocalDistribution> on
+that to generate a metadata file.
+
+Once the module has been parsed, it recursively checks the version requirements of the module to
+pull in any additional missing dependencies.
+
+All changes will be pulled into this tree, but not committed.
 
 =cut
 
-sub import_dist {
+sub import_modules($self, $reqs) {
+   $self->load_module_manifest unless defined $self->module_manifest;
+   my @todo= sort keys %$reqs;
+   while (@todo) {
+      my $mod= shift @todo;
+      my $req_version= $reqs->{$mod}{version};
+      my $details= $self->import_module($mod, $req_version);
+      # Push things into the TODO list if they aren't already in %$reqs or if they have a higher
+      # version requirement.
+      ...
+   }
+}
+
+sub import_module($self, $name, $req_version) {
+   my $existing= $self->module_manifest->{$mod};
+   # Is this requirement already satisfied?
+   return $existing if $existing && $self->check_version($req_version, $existing->{version});
+   # Can it be satisfied by any file we've downloaded?
+   if (my $already_have= $self->parent->dist_cache->find_module($mod, $req_version)) {
+      # find the Git object for this and link it into our tree
+      ...
+   }
+   else {
+      # Find list of available versions of this module from CPAN
+      ...
+      # download that version, and then extract metadata from it
+      ...
+   }
+   # Update the module_manifest, and return it
    ...
 }
 
