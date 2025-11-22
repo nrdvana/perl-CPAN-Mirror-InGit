@@ -2,16 +2,23 @@ package CPAN::Mirror::InGit::MirrorTree;
 # VERSION
 # ABSTRACT: An object managing a CPAN Mirror file structure in a Git Tree
 
-=head1 SYNOPSIS
+=head1 DESCRIPTION
 
-  my $mirror= CPAN::Mirror::InGit::MirrorTree->new($
+This object represents a tree of files in the structure of a CPAN mirror.  It may be an actual
+(partial) mirror of an upstream CPAN mirror, or it may be a local DarkPAN with only the modules
+that have been intentionally added to it.  Attribute L</upstream_url> determines this.  Setting
+C<upstream_utl> inddicates an intention that any file needed from upstream can be automatically
+pulled and added to the local mirror.  Without that attribute, the file tree should only include
+distributions that have intentionally been added.
 
 =cut
 
 use Carp;
-use Moo;
 use Scalar::Util 'refaddr', 'blessed';
 use POSIX 'strftime';
+use IO::Uncompress::Gunzip qw( gunzip $GunzipError );
+use Time::Piece;
+use Moo;
 use v5.36;
 
 sub _json {
@@ -23,8 +30,31 @@ sub _json {
 
 extends 'CPAN::Mirror::InGit::MutableTree';
 
-has dist_meta       => ( is => 'lazy', clearer => 1, predicate => 1 );
-has module_manifest => ( is => 'rw' );
+=attribute upstream_url
+
+If this is truly a mirror of a remote CPAN, this is the base URL.  Some MirrorTree objects will
+be locally managed, and not have an upstream.
+
+=attribute package_details_date
+
+Returns Time::Piece of date from the modules/02package_details.txt file.
+
+=attribute module_info
+
+A hashref of C<< { $module_name => [ $version, $dist_name ] } >>. This can be built from
+L</parse_package_details>.
+
+=cut
+
+has upstream_url           => ( is => 'rw', coerce => \&_add_trailing_slash );
+has package_details_date   => ( is => 'rw' );
+has module_info            => ( is => 'rw', lazy => 1 );
+sub _build_module_info {
+   my ($attrs, $by_mod)= shift->parse_package_details;
+   return $by_mod;
+}
+
+sub _add_trailing_slash { $_[0] =~ m,/\z,? $_[0] : $_[0].'/' }
 
 sub _build_dist_meta($self) {
    # Walk the tree looking for every author dist .json
@@ -42,53 +72,79 @@ sub build_module_manifest {
    ...
 }
 
-=method module_manifest_blob
+=method package_details_blob
 
 Returns the Blob of the C<modules/02packages.details.txt> file, or C<undef> if it doesn't exist.
 
 =cut
 
-sub module_manifest_blob($self) {
+sub package_details_blob($self) {
    my $ent= $self->get_path('modules/02packages.details.txt')
       or return undef;
    return $ent->[0]->is_blob? $ent->[0] : undef;
 }
 
-=method load_module_manifest
+sub fetch_upstream_package_details($self) {
+   croak "No upstream URL for this tree"
+      unless defined $self->upstream_url;
+   my $url= $self->upstream_url . 'modules/02packages.details.txt.gz';
+   my $tx= $self->parent->useragent->get($url);
+   if ($tx->result->is_success) {
+      # Unzip the file and store uncompressed, so that 'git diff' works nicely on it.
+      my $txt;
+      gunzip \$tx->result->body => \$txt
+         or croak "gunzip failed: $GunzipError";
+      $self->set_path('modules/02packages.details.txt', \$txt);
+   }
+   else {
+      croak "Failed to find file upstream: ".$tx->result->extract_start_line;
+   }
+}
 
-Parse C<< modules/02packages.details.txt.gz >> into attribute L</module_manifest>.
+=method parse_package_details
+
+Parse C<< modules/02packages.details.txt.gz >> into attributes L</package_details_date> and
+L</module_info>.
 
 =cut
 
-sub load_module_manifest($self) {
-   my $blob= $self->module_manifest_blob
-      or croak "Can't read modules/02packages.details.txt";
+sub parse_package_details($self) {
+   my $blob= $self->package_details_blob;
+   if (!$blob && $self->upstream_url) {
+      # Download from upstream
+      $self->fetch_upstream_package_details;
+      $blob= $self->package_details_blob
+         or croak "BUG: still can't find package.details blob after downloading it";
+   }
    my $content= $blob->content;
-   my %manifest;
+   my %by_mod;
    my %attrs;
-   while ($content =~ /\G([^:]+):\s+(.*)\n/gc) {
+   while ($content =~ /\G([^:\n]+):\s+(.*)\n/gc) {
       $attrs{$1}= $2;
    }
    $content =~ /\G\n/gc or croak "missing blank line after headers";
    while ($content =~ /\G(\S+)\s+(\S+)\s+(\S+)\n/gc) {
       my $ver= $2 eq 'undef'? undef : $2;
-      $manifest{$1}= { version => $ver, file => $3 };
+      $by_mod{$1}= [ $ver, $3 ];
    }
    pos $content == length $content
       or croak "Parse error at '".substr($content, pos($content), 10)."'";
-   $self->module_manifest(\%manifest);
-   \%manifest;
+   my $timestamp = $attrs{'Last-Updated'}? Time::Piece->strptime($attrs{'Last-Updated'}, "%a, %d %b %Y %H:%M:%S GMT")
+                 : undef; # TODO: fall back to date from branch commit
+   $self->package_details_date($timestamp);
+   $self->module_info(\%by_mod);
+   return (\%attrs, \%by_mod);
 }
 
-=method save_module_manifest
+=method save_package_details
 
-Write C<< modules/02packages.details.txt.gz >> from attribute L</module_manifest>.
+Write C<< modules/02packages.details.txt >> from L</module_info> and data in the attributes.
 
 =cut
 
-sub save_module_manifest($self) {
-   my $url= 'http://www.cpan.org/modules/02packages.details.txt';
-   my $line_count= 9 + keys $self->module_manifest->%*;
+sub save_package_details($self) {
+   my $url= 'cpan_mirror_ingit.local'; # TODO: store the canonical URL for this branch somewhere
+   my $line_count= 9 + keys $self->module_info->%*;
    my $date= strftime("%a, %d %b %Y %H:%M:%S GMT", gmtime);
    my $content= <<~END;
       File:         02packages.details.txt
@@ -101,10 +157,39 @@ sub save_module_manifest($self) {
       Last-Updated: $date
       
       END
-   for (sort keys $self->module_files->%*) {
-      $content .= sprintf("%s %s  %s\n", $_, $_->{version}, $_->{file});
+   for (sort keys $self->module_info->%*) {
+      $content .= sprintf("%s %s  %s\n", $_, $_->[1] // 'undef', $_->[1]);
    }
    $self->set_path('modules/02packages.details.txt', \$content);
+}
+
+=method fetch_upstream_dist
+
+  $mirror->fetch_upstream_dist($path_name, %options);
+
+Fetch the .tar.gz from upstream and add it to this tree.  This only works when upstream_url is
+set; i.e. this Mirror is an actual mirror of an upstream CPAN.
+
+=cut
+
+sub fetch_upstream_dist($self, $author_path, %options) {
+   croak "No upstream URL for this tree"
+      unless defined $self->upstream_url;
+   my $url= $self->upstream_url . 'authors/id/' . $author_path;
+   my $tx= $self->parent->useragent->get($url);
+   croak "Failed to find file upstream: ".$tx->result->extract_start_line
+      unless $tx->result->is_success;
+   if ($options{untar}) {
+      ...
+   } else {
+      $self->set_path('authors/id/' . $author_path, \$tx->result->body);
+   }
+}
+
+sub fetch_upstream_module_dist($self, $mod_name, %options) {
+   my $info= $self->module_info->{$mod_name}
+      or croak "Module '$mod_name' not found in package list";
+   $self->fetch_upstream_dist($info->[1], %options);
 }
 
 =method import_modules
@@ -141,20 +226,20 @@ sub import_modules($self, $reqs) {
    }
 }
 
-sub import_module($self, $name, $req_version) {
-   my $existing= $self->module_manifest->{$mod};
+sub import_module($self, $module_name, $req_version) {
+   my $existing= $self->module_manifest->{$module_name};
    # Is this requirement already satisfied?
    return $existing if $existing && $self->check_version($req_version, $existing->{version});
    # Can it be satisfied by any file we've downloaded?
-   if (my $already_have= $self->parent->dist_cache->find_module($mod, $req_version)) {
+   if (my $already_have= $self->parent->dist_cache->find_module($module_name, $req_version)) {
       # find the Git object for this and link it into our tree
       ...
    }
    else {
       # Find list of available versions of this module from CPAN
-      ...
+      ...;
       # download that version, and then extract metadata from it
-      ...
+      ...;
    }
    # Update the module_manifest, and return it
    ...

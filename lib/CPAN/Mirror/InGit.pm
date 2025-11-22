@@ -68,7 +68,7 @@ An instance of L<Git::Raw::Repository> (which wraps libgit2.so) for accessing th
 You can pass this attribute to the constructor as a simple directory path which gets inflated
 to a Repository object.
 
-=head2 upstream_mirror
+=head2 upstream_mirrors
 
 The URL of the upstream CPAN mirror, from which packages will be fetched.
 
@@ -92,7 +92,8 @@ The L<Mojo::UserAgent> object used when downloading files from the real CPAN.
 =cut
 
 has repo                      => ( is => 'ro', required => 1, coerce => \&_open_repo );
-has upstream_mirror           => ( is => 'ro', required => 1, default => 'https://www.cpan.org/' );
+has upstream_mirrors          => ( is => 'ro', required => 1, coerce => \&_coerce_upstreams,
+                                   default => 'https://www.cpan.org' );
 has dist_cache_branch_name    => ( is => 'ro', default => 'dist-cache' );
 has git_author_name           => ( is => 'rw', default => 'CPAN::Mirror::InGit' );
 has git_author_email          => ( is => 'rw', default => 'CPAN::Mirror::InGit@localhost' );
@@ -105,6 +106,7 @@ sub _build_workdir_branch_name($self) {
 
 has useragent                 => ( is => 'lazy' );
 sub _build_useragent($self) {
+   require Mojo::UserAgent;
    return Mojo::UserAgent->new;
 }
 
@@ -113,11 +115,20 @@ sub _open_repo($thing) {
    return Git::Raw::Repository->open("$thing");
 }
 
+sub _coerce_upstreams {
+   my @list= ref $_[0] eq 'ARRAY'? @{$_[0]} : ($_[0]);
+   for (@list) {
+      # Convert strings to URLs
+      $_= { url => $_ } unless ref $_;
+   }
+   return \@list;
+}
+
 =head1 METHODS
 
 =head2 mirror
 
-  $mirror= $cpan_repo->mirror($branch_or_tag_or_id, $create=0);
+  $mirror= $cpan_repo->mirror($branch_or_tag_or_id);
 
 Return a L<MirrorTree object|CPAN::Mirror::InGit::MirrorTree> for the given
 branch name, git tag, or commit hash.  This branch must look like a mirror
@@ -128,34 +139,58 @@ be a branch name or L<Git::Raw::Branch> object.
 
 =cut
 
-sub mirror($self, $branch_or_tag_or_id=undef, $create=0) {
-   my ($tree, $origin, $mirror);
-   if (defined $branch_or_tag_or_id) {
-      ($tree, $origin)= $self->lookup_tree($branch_or_tag_or_id);
-      return undef unless $tree or $create;
+sub mirror($self, $branch_or_tag_or_id=undef) {
+   # If branch/tag/id is omitted, use the working dir of the repo
+   unless (defined $branch_or_tag_or_id) {
+      croak "Can't use default branch on a bare repo"
+         if $self->repo->is_bare;
+      $branch_or_tag_or_id= $self->workdir_branch_name;
    }
+   my ($tree, $origin)= $self->lookup_tree($branch_or_tag_or_id);
+   return undef unless $tree;
+
    my $branch= $origin && ref($origin)->isa('Git::Raw::Branch')? $origin : undef;
    # undefined, or the same branch pointed to by HEAD mean that it should use the working tree
    my $use_workdir= !$self->repo->is_bare && (!defined $origin || ($branch && $branch->is_head));
-   $mirror= CPAN::Mirror::InGit::MirrorTree->new(
+   my $mirror= CPAN::Mirror::InGit::MirrorTree->new(
       parent => $self,
       tree => $tree,
       (branch => $branch)x!!$branch,
       use_workdir => $use_workdir,
    );
    # To be recognized as a mirror, the tree must contain modules/02packages.details.txt
-   unless ($mirror->module_manifest_blob) {
-      return undef unless $create;
-      $mirror->save_module_manifest;
-   }
+   return undef unless $mirror->package_details_blob;
    return $mirror;
 }
 
 =head2 create_mirror
 
-  $mirror= $cpan_repo->create_mirror($branch_name);
+  $mirror= $cpan_repo->create_mirror($branch_name, %params);
 
+Create a new mirror brawnch.  The branch must not already exist.
 
+=cut
+
+sub create_mirror($self, $name, %params) {
+   croak "Branch '$name' already exists"
+      if Git::Raw::Branch->lookup($self->repo, $name, 1);
+   croak "Branch '$name' already exists upstream"
+      if Git::Raw::Branch->lookup($self->repo, $name, 0);
+   my $mirror= CPAN::Mirror::InGit::MirrorTree->new(%params, parent => $self);
+   # It won't exist until we create a commit and create a branch.
+   if ($mirror->upstream_url) {
+      # Initial commit will jsut be the packages.details.txt file
+      $mirror->fetch_upstream_package_details;
+      $mirror->update_tree;
+      $mirror->commit("New branch mirroring ".$mirror->upstream_url, create_branch => $name);
+   }
+   else {
+      $mirror->save_package_details;
+      $mirror->update_tree;
+      $mirror->commit("New empty CPAN tree", create_branch => $name);
+   }
+   return $mirror;
+}
 
 =head2 dist_cache
 
@@ -295,6 +330,22 @@ operation.
 
 sub new_signature($self) {
    Git::Raw::Signature->now($self->git_author_name, $self->git_author_email);
+}
+
+=head2 lookup_versions
+
+  $version_list= $cpan_repo->lookup_versions($module_name);
+
+This returns a list of all versions of that module which are already cached in any Mirror of
+this repo, and also any version which is available from any of the upstream mirrors listed in
+L</upstream_mirrors>.
+
+=cut
+
+sub lookup_versions($self, $module_name) {
+   for my $up ($self->upstream_mirrors->@*) {
+      ...;
+   }
 }
 
 =head2 get_dist_index

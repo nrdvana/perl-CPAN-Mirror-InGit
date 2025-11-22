@@ -174,6 +174,7 @@ sub _assemble_tree($repo, $tree, $changes) {
 
 sub commit($self, $message, %opts) {
    croak "No changes added" unless $self->has_changes;
+   my $repo= $self->parent->repo;
    $self->update_tree;
    my $branch= $self->branch;
    my $cur_sig= $self->parent->new_signature;
@@ -182,22 +183,31 @@ sub commit($self, $message, %opts) {
    my $commit;
    if ($self->use_workdir) {
       $commit= Git::Raw::Commit->create(
-         $self->parent->repo, $message, $author, $committer,
+         $repo, $message, $author, $committer,
          [ $self->parent->repo->head->target ],
          $self->tree) # lacking final param, it updates HEAD
          or croak "commit failed";
    }
    elsif ($branch) {
-      my $commit= Git::Raw::Commit->create(
-         $self->parent->repo, $message, $author, $committer,
+      $commit= Git::Raw::Commit->create(
+         $repo, $message, $author, $committer,
          [ $self->branch->peel('commit') ],
          $self->tree, undef) # undef final param means don't update HEAD
          or croak "commit failed";
       # Update the branch
       $branch->target($commit);
    }
+   elsif (length $opts{create_branch}) {
+      $commit= Git::Raw::Commit->create(
+         $repo, $message, $author, $committer,
+         [], # fresh branch, no parent commit
+         $self->tree, undef) # undef final param means don't update HEAD
+         or croak "commit failed";
+      $branch= $repo->branch($opts{create_branch}, $commit);
+      $self->branch($branch);
+   }
    else {
-      croak "Can't commit without a branch or use_workdir";
+      croak "Can't commit without a branch or use_workdir or option create_branch";
    }
    $self->has_changes(0);
    return $commit;
