@@ -21,13 +21,6 @@ use Time::Piece;
 use Moo;
 use v5.36;
 
-sub _json {
-   state $json_class= eval { require Cpanel::JSON::XS; 'Cpanel::JSON::XS' }
-                   // eval { require JSON::XS; 'JSON::XS' }
-                   // do { require JSON::PP; 'JSON::PP' };
-   $json_class->new
-}
-
 extends 'CPAN::Mirror::InGit::MutableTree';
 
 =attribute upstream_url
@@ -175,15 +168,18 @@ set; i.e. this Mirror is an actual mirror of an upstream CPAN.
 sub fetch_upstream_dist($self, $author_path, %options) {
    croak "No upstream URL for this tree"
       unless defined $self->upstream_url;
-   my $url= $self->upstream_url . 'authors/id/' . $author_path;
+   my $path= "authors/id/$author_path";
+   my $url= $self->upstream_url . $path;
    my $tx= $self->parent->useragent->get($url);
    croak "Failed to find file upstream: ".$tx->result->extract_start_line
       unless $tx->result->is_success;
-   if ($options{untar}) {
-      ...
-   } else {
-      $self->set_path('authors/id/' . $author_path, \$tx->result->body);
-   }
+   my $data= $tx->result->body;
+   $self->parent->process_distfile(
+      tree => $self,
+      file_path => $path,
+      file_data => \$data,
+      (extract => 1)x!!$options{extract},
+   );
 }
 
 sub fetch_upstream_module_dist($self, $mod_name, %options) {

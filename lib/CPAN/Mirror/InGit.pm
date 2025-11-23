@@ -1,9 +1,12 @@
 package CPAN::Mirror::InGit;
 use Git::Raw::Repository;
+use Archive::Tar;
 use Archive::Tar::Constant; # for constants to be avilable at compile time
 use Scalar::Util 'blessed';
-use Parse::LocalDistribution;
 use CPAN::Mirror::InGit::MirrorTree;
+use CPAN::Meta 2.150010;
+use Module::Metadata;
+use Fcntl qw( S_ISREG S_ISLNK S_IFMT S_ISDIR );
 use Carp;
 use Moo;
 use v5.36;
@@ -192,39 +195,6 @@ sub create_mirror($self, $name, %params) {
    return $mirror;
 }
 
-=head2 dist_cache
-
-  $dists= $cpan_repo->dist_cache;
-
-Return the L<DistCache|CPAN::Mirror::InGit::DistCache> representing the C<'dist-cache'>
-git branch (or name specified in L</dist_cache_branch_name>).  This creates the git branch
-if it doesn't already exist.
-
-=cut
-
-sub dist_cache($self) {
-   my $branch= Git::Raw::Branch->lookup($self->repo, $self->dist_cache_branch_name, 1);
-   if (!$branch) {
-      # Create an empty directory
-      my $empty_dir= Git::Raw::Tree::Builder->new($self->repo)->write
-         or croak;
-      my $signature= $self->new_signature
-         or croak;
-      # Wrap it with an initial commit
-      my $commit= Git::Raw::Commit->create($self->repo, "Initial empty package cache",
-         $signature, $signature, [], $empty_dir, 'refs/heads/'.$self->dist_cache_branch_name)
-         or croak "Failed to create package cache initial commit";
-      # Create the branch
-      $branch= Git::Raw::Branch->create($self->repo, $self->dist_cache_branch_name, $commit)
-         or croak 'Failed to create branch '.$self->dist_cache_branch_name;
-   }
-   return CPAN::Mirror::InGit::DistCache->new(parent => $self, branch => $branch);
-}
-
-sub has_dist_cache($self) {
-   return !!Git::Raw::Branch->lookup($self->repo, $self->dist_cache_branch_name, 1);
-}
-
 =head2 lookup_tree
 
   $tree= $cpan_repo->lookup_tree($branch_or_tag_or_commit);
@@ -348,29 +318,101 @@ sub lookup_versions($self, $module_name) {
    }
 }
 
-=head2 get_dist_index
+=head2 process_distfile
 
-  my $index= $darkpan->get_dist_index($author_path_or_sha1_or_gitobj);
-  # {
-  #   'Package::Name' => $version,
-  #   ...
-  # }
-
-Like the CPAN indexer, this takes a distribution tarball and returns the packages and versions
-which it contains.  The index is built by L<Parse::LocalDistribution> and may be returned form
-cache.
+  my $index= $darkpan->process_distfile(
+    tree      => $mirror_tree,
+    file_path => $path,
+    file_data => \$bytes,
+    untar     => $bool,   # whether to extract tar file into the tree
+  );
 
 =cut
 
-sub get_dist_index {
-   ...
-   # If git obj or sha1 provided
-   #    look for cache at ->dist_cache->get_blob("index_cache/$sha1")
-   #    return cache if found
-   #    extract to a tar.gz tmp file
-   # extract tarball path to a tmpdir
-   # run Parse::LocalDistribution on it.
-   # cache the result into git if the source came from git
+sub process_distfile($self, %opts) {
+   my ($tree, $file_path, $file_data, $extract)= @opts{'tree','file_path','file_data','extract'};
+   # Decompress tar in memory.  The decompression gets complicated since it can be bz2 or gz
+   # so write to a temp file and then parse that with the auto-detection of "compress".
+   if ($file_path =~ /\.(tar\.gz|tar\.bz2|tgz)\z/) {
+      my $path_without_extension= substr($file_path, 0, $-[0]);
+      my $tmp= File::Temp->new;
+      $tmp->print($$file_data) or die "write: $!";
+      $tmp->flush;
+
+      # Iterate across the files in the tar archive
+      my $tar= Archive::Tar->new("$tmp", 1);
+      my @files= $tar->get_files;
+      if (!@files) {
+         croak "Failed to extract any files from archive $file_path";
+      }
+      # Remove prefix directory if every file in archive starts with the same directory
+      (my $prefix= $files[0]->name) =~ s,/.*,,;
+      $prefix .= '/';
+      for (@files) {
+         if (substr($_->name,0,length $prefix) ne $prefix) {
+            $prefix= '';
+            last;
+         }
+      }
+      # Build by-name hash of files
+      my %files= map +( substr($_->name, length $prefix) => $_ ), @files;
+      my $meta;
+      # Look for a META.json
+      if (my $meta_json= $files{'META.json'}) {
+         eval {
+            my $cm= CPAN::Meta->load_json_string($meta_json->get_content);
+            $meta= $cm->as_struct({ version => 2 });
+         } or warn "Failed to load $file_path/${prefix}META.json: $@";
+      }
+      # else look for META.yml
+      if (!$meta && (my $meta_yml= $files{'META.yml'})) {
+         eval {
+            my $cm= CPAN::Meta->load_yaml_string($meta_yml->get_content);
+            $meta= $cm->as_struct({ version => 2 });
+         } or warn "Failed to load $file_path/${prefix}META.yml: $@";
+      }
+      # TODO: add some fall-back that guesses at prereqs.
+      $meta //= {};
+      # If the meta didn't contain "provides", add that using Module::Metadata
+      if (!$meta->{provides}) {
+         my $provides= $meta->{provides}= {};
+         for my $pm_fname (grep /\.pm\z/ && !m{^(t|xt|inc|script|bin)/}, keys %files) {
+            eval {
+               open my $pm_fh, '<', $files{$pm_fname}->get_content_by_ref or die;
+               my $mm= Module::Metadata->new_from_handle($pm_fh, $pm_fname);
+               for my $pkg (grep $_ ne 'main', $mm->name, $mm->packages_inside) {
+                  $provides->{$pkg}{file}= $pm_fname;
+                  $provides->{$pkg}{version} //= $mm->version($pkg);
+               }
+               1;
+            } or warn "Failed to parse packages in $file_path/${prefix}$pm_fname: $@";
+         }
+      }
+      # If caller requests 'extract', add the tar's files and symlinks to the tree
+      if ($extract) {
+         for (keys %files) {
+            my $mode= $files{$_}->mode;
+            if (S_ISREG($mode)) {
+               # normalize to 644 or 755
+               $mode= S_IFMT($mode) | (($mode & 1)? 0755 : 0644);
+               $tree->set_path("$path_without_extension/$_", $files{$_}->get_content_by_ref, $mode);
+            } elsif (S_ISLNK($mode)) {
+               $tree->set_path("$path_without_extension/$_", \$files{$_}->linkname, S_IFMT($mode));
+            } elsif (!S_ISDIR($mode)) {
+               warn "Skipping tar entry for '$path_without_extension/$_' (mode=$mode)\n";
+            }
+         }
+      } else {
+         $tree->set_path($file_path, $file_data);
+      }
+      # Now serialzie the meta and write it to the tree alongside the TAR
+      my $json= CPAN::Meta->new($meta)->as_string({ version => 2 });
+      $tree->set_path($path_without_extension . '.json', \$json);
+   }
+   else {
+      warn "$file_path does not appear to be a TAR file.  Skipping metadata processing.";
+      $tree->set_path($file_path, $file_data);
+   }
 }
 
 1;
