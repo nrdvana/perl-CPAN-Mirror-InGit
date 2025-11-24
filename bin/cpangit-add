@@ -60,27 +60,6 @@ unless (-d $repo_path && -d "$repo_path/objects" && -f "$repo_path/config") {
       or die "$repo_path does not appear to be a git dir, and no parent contains '.git'";
 }
 
-my $cpan_repo= CPAN::Mirror::InGit->new(
-   repo => $repo_path,
-   upstream_mirror => \@upstream,
-);
-unless (Git::Raw::Branch->lookup($cpan_repo->repo, $cpan_repo->dist_cache_branch_name, 1)) {
-   die "Repo at $repo_path does not appear to be used by CPAN::Mirror::InGit"
-      ." (missing branch ".$cpan_repo->dist_cache_branch_name.")"
-}
-
-# If branch name is not provided, use the working copy.  But there must be a working copy.
-# If the branch name is the same as the one checked out, we need to modify the working
-# copy instead of the branch itself, but the MirrorTree object handles that.
-my $cur_branch= $cpan_repo->workdir_branch_name;
-say "cur_branch=$cur_branch";
-die "Must specify --branch-name=X for bare git repo"
-   unless length $branch_name || length $cur_branch;
-$branch_name //= $cur_branch;
-
-my $mirror= $cpan_repo->mirror($branch_name, $create)
-   or die "No mirror named '$branch_name' and --create not requested";
-
 my %requirements;
 
 while (@ARGV) {
@@ -103,5 +82,28 @@ while (@ARGV) {
    }
 }
 
-$mirror->import_modules(\%requirements);
-...
+{ # scope to help run destructors in the right order
+   my $cpan_repo= CPAN::Mirror::InGit->new(
+      repo => $repo_path,
+      upstream_mirror => \@upstream,
+   );
+   unless (Git::Raw::Branch->lookup($cpan_repo->repo, $cpan_repo->dist_cache_branch_name, 1)) {
+      die "Repo at $repo_path does not appear to be used by CPAN::Mirror::InGit"
+         ." (missing branch ".$cpan_repo->dist_cache_branch_name.")"
+   }
+
+   # If branch name is not provided, use the working copy.  But there must be a working copy.
+   # If the branch name is the same as the one checked out, we need to modify the working
+   # copy instead of the branch itself, but the MirrorTree object handles that.
+   my $cur_branch= $cpan_repo->workdir_branch_name;
+   say "cur_branch=$cur_branch";
+   die "Must specify --branch-name=X for bare git repo"
+      unless length $branch_name || length $cur_branch;
+   $branch_name //= $cur_branch;
+
+   my $mirror= $cpan_repo->mirror($branch_name, $create)
+      or die "No mirror named '$branch_name' and --create not requested";
+
+   $mirror->import_modules(\%requirements);
+}
+exit 0;

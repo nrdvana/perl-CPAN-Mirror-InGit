@@ -1,0 +1,75 @@
+#! /usr/bin/env perl
+use v5.36;
+use FindBin;
+BEGIN { push @INC, "$FindBin::RealBin/../lib" if -f "$FindBin::RealBin/../dist.ini" }
+use Cwd;
+use CPAN::Mirror::InGit;
+use Git::Raw::Branch;
+use Getopt::Long;
+use Pod::Usage;
+
+=head1 USAGE
+
+  cpangit-newarchive --upstream=URL BRANCH_NAME
+  cpangit-newarchive --from=BRANCH [--from=BRANCH2 ...] BRANCH_NAME
+
+Create a new Archive branch.  If you specify C<--upstream>, it automatically pulls from the
+remote URL as needed and acts like a local cache of the remote archive.  If you specify
+C<--from> it behaves like a curated archive and looks to C<--branch> to import/update modules.
+C<--from> can be specified multiple times.
+
+You can later edit the C<cpan_ingit.json> file to reconfigure a branch.
+
+=head1 OPTIONS
+
+=over
+
+=item --repo=PATH
+
+Path to the Git repository of L<CPAN::Mirror::InGit>.  Uses the C<.git> dir at or above the
+current directory by default.
+
+=item --upstream=URL
+
+The URL of the upstream CPAN mirror
+
+=item --from=BRANCH
+
+Set a default source branch to import new moduels from.
+
+=back
+
+=cut
+
+GetOptions(
+   'repo=s'     => \my $repo_path,
+   'from=s'     => \my @source_branches,
+   'upstream=s' => \my $upstream_url,
+   'help'       => sub { pod2usage(1) },
+) && @ARGV == 1 or pod2usage(2);
+
+pod2usage(-message => "Specify only --from or --upstream, not both", -exit => 2)
+   if defined $upstream_url && @source_branches;
+
+my $branch_name= shift;
+
+$repo_path //= getcwd;
+unless (-d $repo_path && -d "$repo_path/objects" && -f "$repo_path/config") {
+   # walk up directories until we find ".git"
+   my $path= $repo_path;
+   while (length $path && !-d "$path/.git") {
+      $path =~ s,[^/]+\z,,;
+      $path =~ s,/\z,,;
+   }
+   length $path
+      or die "$repo_path does not appear to be a git dir, and no parent contains '.git'";
+}
+
+{ # scope to help run destructors in the right order
+   my $cpan_repo= CPAN::Mirror::InGit->new(repo => $repo_path);
+   $cpan_repo->create_mirror($branch_name,
+      upstream_url => $upstream_url,
+      source_branches => \@source_branches,
+   );
+}
+exit 0;

@@ -6,10 +6,26 @@ package CPAN::Mirror::InGit::MirrorTree;
 
 This object represents a tree of files in the structure of a CPAN mirror.  It may be an actual
 (partial) mirror of an upstream CPAN mirror, or it may be a local DarkPAN with only the modules
-that have been intentionally added to it.  Attribute L</upstream_url> determines this.  Setting
-C<upstream_utl> inddicates an intention that any file needed from upstream can be automatically
-pulled and added to the local mirror.  Without that attribute, the file tree should only include
-distributions that have intentionally been added.
+that have been intentionally added to it.  It could also be some mixture of the two, but that
+seems like a bad idea, so I recommend sticking to "mirror" or "DarkPAN" patterns.
+
+Attribute L</upstream_url> indicates that there is a remote server and this branch is holding a
+cache of files from that server.  It enables the L</fetch_upstream_package_details> and
+L</fetch_upstream_dist> methods.  It also means that the C<02package.details.txt> file will
+list packages that don't exist locally on the assumption that they can be downloaded as needed.
+Meanwhile, the C<02package.details.txt> will frequently be replaced by the upstream copy.
+
+For the trees which are curated collections of perl distributions, the C<02package.details.txt>
+lists only the modules/versions that have been added to this collection.  Further, there should
+only ever be one dist providing a module per collection.
+
+Distributions in C<authors/id/X/XX/XXXXX> should be identical to the public distributions of the
+official CPAN, but they may be paired with a json file (the dist extension replaced with
+C<".json"> which is a local cache of information about the archive, but the archive should
+remain untouched.  Distributions in C<authors/id/local> are considered locally authored, and
+may be modified versions of the public modules.  You may even choose to give them the same
+version number as public packages, and have the package.details file reference the local instead
+of the original author.
 
 =cut
 
@@ -17,6 +33,7 @@ use Carp;
 use Scalar::Util 'refaddr', 'blessed';
 use POSIX 'strftime';
 use IO::Uncompress::Gunzip qw( gunzip $GunzipError );
+use JSON::PP;
 use Time::Piece;
 use Moo;
 use v5.36;
@@ -28,18 +45,26 @@ extends 'CPAN::Mirror::InGit::MutableTree';
 If this is truly a mirror of a remote CPAN, this is the base URL.  Some MirrorTree objects will
 be locally managed, and not have an upstream.
 
+=attribute source_branches
+
+If this MirrorTree is more like a curated collection than an automatic mirror of an upstream,
+specify a list of other branches (an arrayref of branch names) from which it can pull packages.
+These will be used by default in L</import_module>, but you can override them when calling that
+method.
+
 =attribute package_details_date
 
-Returns Time::Piece of date from the modules/02package_details.txt file.
+Returns L<Time::Piece> of the last-update date from the modules/02package_details.txt file.
 
 =attribute module_info
 
-A hashref of C<< { $module_name => [ $version, $dist_name ] } >>. This can be built from
+A hashref of C<< { $module_name => [ $version, $dist_path ] } >>. This can be built from
 L</parse_package_details>.
 
 =cut
 
 has upstream_url           => ( is => 'rw', coerce => \&_add_trailing_slash );
+has source_branches        => ( is => 'rw' );
 has package_details_date   => ( is => 'rw' );
 has module_info            => ( is => 'rw', lazy => 1 );
 sub _build_module_info {
@@ -47,12 +72,24 @@ sub _build_module_info {
    return $by_mod;
 }
 
-sub _add_trailing_slash { $_[0] =~ m,/\z,? $_[0] : $_[0].'/' }
-
-sub _build_dist_meta($self) {
-   # Walk the tree looking for every author dist .json
-   ...
+sub load_config($self) {
+   my $cfg_blob= $self->config_blob
+      or die "Missing '/cpan_ingit.json'";
+   my $cfg_data= JSON::PP->new->utf8->relaxed->decode($cfg_blob->content);
+   $self->upstream_url($cfg_data->{upstream_url});
+   $self->source_branches($cfg_data->{source_branches});
 }
+
+sub write_config($self) {
+   my $cfg_blob= $self->config_blob;
+   my $cfg_data= $cfg_blob? JSON::PP->new->utf8->relaxed->decode($cfg_blob->content) : {};
+   $cfg_data->{upstream_url}= $self->upstream_url;
+   $cfg_data->{source_branches}= $self->source_branches;
+   $self->set_path('cpan_ingit.json', \JSON::PP->new->utf8->canonical->pretty->encode($cfg_data));
+   $self;
+}
+
+sub _add_trailing_slash { !defined $_[0] || $_[0] =~ m,/\z,? $_[0] : $_[0].'/' }
 
 =method build_module_manifest
 
@@ -65,11 +102,21 @@ sub build_module_manifest {
    ...
 }
 
+=method config_blob
+
+Returns the Blob of the C<cpan_ingit.conf> file, or C<undef> if it doesn't exist.
+
 =method package_details_blob
 
 Returns the Blob of the C<modules/02packages.details.txt> file, or C<undef> if it doesn't exist.
 
 =cut
+
+sub config_blob($self) {
+   my $ent= $self->get_path('cpan_ingit.json')
+      or return undef;
+   return $ent->[0]->is_blob? $ent->[0] : undef;
+}
 
 sub package_details_blob($self) {
    my $ent= $self->get_path('modules/02packages.details.txt')
@@ -129,15 +176,17 @@ sub parse_package_details($self) {
    return (\%attrs, \%by_mod);
 }
 
-=method save_package_details
+=method write_package_details
 
 Write C<< modules/02packages.details.txt >> from L</module_info> and data in the attributes.
+This adds it to the pending changes to the tree, but does not commit it.
 
 =cut
 
-sub save_package_details($self) {
+sub write_package_details($self) {
    my $url= 'cpan_mirror_ingit.local'; # TODO: store the canonical URL for this branch somewhere
-   my $line_count= 9 + keys $self->module_info->%*;
+   my $mod_info= $self->module_info // {};
+   my $line_count= 9 + keys %$mod_info;
    my $date= strftime("%a, %d %b %Y %H:%M:%S GMT", gmtime);
    my $content= <<~END;
       File:         02packages.details.txt
@@ -150,7 +199,7 @@ sub save_package_details($self) {
       Last-Updated: $date
       
       END
-   for (sort keys $self->module_info->%*) {
+   for (sort keys %$mod_info) {
       $content .= sprintf("%s %s  %s\n", $_, $_->[1] // 'undef', $_->[1]);
    }
    $self->set_path('modules/02packages.details.txt', \$content);
@@ -196,21 +245,25 @@ sub fetch_upstream_module_dist($self, $mod_name, %options) {
   #   'Some::Module'    => {},   # any version
   # }
 
-This method processes a list of module requirements much like C<cpanm> would.  If the module is
-not available in the mirror, it looks in the distribution cache to see if you are already using
-a suitable version in another branch, and if so, uses that.  If not, it goes upstream to
-cpan.org and fetches the latest version of the module, and runs L<Parse::LocalDistribution> on
-that to generate a metadata file.
+This method processes a list of module requirements to pull in matching modules and only as many
+dependencies as are required.  It starts by checking whether this branch contains a module that
+meets the requirements.  If not, it checks the mirror branches listed in "import_sources".
+If this or any "import_source" branch has an "upstream_url", it may pull from remote into that
+branch.
 
-Once the module has been parsed, it recursively checks the version requirements of the module to
-pull in any additional missing dependencies.
+The intended workflow is that you have one branch tracking www.cpan.org and pulling in packages
+automatically as needed, and then perhaps a branch where you review the modules before importing
+them, and maybe a branch where you upload private DarkPAN modules, and then any number of
+application branches that import from the reviewed branch of the DarkPAN branch. This way you
+separate the process of building an application's module collection from the process of
+reviewing public modules.
 
-All changes will be pulled into this tree, but not committed.
+All changes will be pulled into this MutableTree object, but not committed.  If this is the
+working branch, the index also gets updated.
 
 =cut
 
 sub import_modules($self, $reqs) {
-   $self->load_module_manifest unless defined $self->module_manifest;
    my @todo= sort keys %$reqs;
    while (@todo) {
       my $mod= shift @todo;
@@ -223,7 +276,7 @@ sub import_modules($self, $reqs) {
 }
 
 sub import_module($self, $module_name, $req_version) {
-   my $existing= $self->module_manifest->{$module_name};
+   my $existing= $self->module_info->{$module_name};
    # Is this requirement already satisfied?
    return $existing if $existing && $self->check_version($req_version, $existing->{version});
    # Can it be satisfied by any file we've downloaded?

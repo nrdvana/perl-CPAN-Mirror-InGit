@@ -161,8 +161,9 @@ sub mirror($self, $branch_or_tag_or_id=undef) {
       (branch => $branch)x!!$branch,
       use_workdir => $use_workdir,
    );
-   # To be recognized as a mirror, the tree must contain modules/02packages.details.txt
-   return undef unless $mirror->package_details_blob;
+   # To be recognized as a mirror, the tree must contain cpan_ingit.json and modules/02packages.details.txt
+   return undef unless $mirror->package_details_blob && $mirror->config_blob;
+   $mirror->load_config;
    return $mirror;
 }
 
@@ -181,14 +182,16 @@ sub create_mirror($self, $name, %params) {
       if Git::Raw::Branch->lookup($self->repo, $name, 0);
    my $mirror= CPAN::Mirror::InGit::MirrorTree->new(%params, parent => $self);
    # It won't exist until we create a commit and create a branch.
-   if ($mirror->upstream_url) {
-      # Initial commit will jsut be the packages.details.txt file
+   if (length $mirror->upstream_url) {
+      # Initial commit will just be the cpan_ingit.json and packages.details.txt file
       $mirror->fetch_upstream_package_details;
+      $mirror->write_config;
       $mirror->update_tree;
       $mirror->commit("New branch mirroring ".$mirror->upstream_url, create_branch => $name);
    }
    else {
-      $mirror->save_package_details;
+      $mirror->write_config;
+      $mirror->write_package_details;
       $mirror->update_tree;
       $mirror->commit("New empty CPAN tree", create_branch => $name);
    }
