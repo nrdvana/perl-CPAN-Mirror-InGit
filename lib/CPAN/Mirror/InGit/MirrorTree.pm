@@ -279,19 +279,67 @@ sub import_module($self, $module_name, $req_version) {
    my $existing= $self->module_info->{$module_name};
    # Is this requirement already satisfied?
    return $existing if $existing && $self->check_version($req_version, $existing->{version});
-   # Can it be satisfied by any file we've downloaded?
-   if (my $already_have= $self->parent->dist_cache->find_module($module_name, $req_version)) {
-      # find the Git object for this and link it into our tree
-      ...
+   # Walk through the list of import sources looking for a version that works
+   for my $src ($self->import_sources->@*) {
+      my $branch= $self->mirror($src);
+      if (my $from_branch= $branch->module_info->{$module_name}) {
+         if ($self->check_version($req_version, $from_branch->{version})) {
+            $self->import_dist($from_branch->{distfile});
+            return $from_branch;
+         }
+      }
    }
-   else {
-      # Find list of available versions of this module from CPAN
-      ...;
-      # download that version, and then extract metadata from it
-      ...;
+   # TODO: consider backpan
+   croak "No source has a version of $module_name matching $req_version";
+}
+
+sub parse_version_requirement($self, $spec) {
+   my @requirements;
+   for (split ',', $spec) {
+      /^\s*(?:(<|<=|>|>=|==|!=)\s*)?(v?[0-9]\.[0-9_\.]*)\s*\z/
+         or croak "Invalid version requirement '$spec'";
+      my $op= $1 // '>=';
+      my $ver= version->parse($2);
+      push @requirements, $op, $ver;
    }
-   # Update the module_manifest, and return it
-   ...
+   return \@requirements;
+}
+
+sub check_version($self, $requirement, $version) {
+   $version= version->parse($version)
+      unless ref $version eq 'version';
+   $requirement= ref $requirement eq 'HASH'? %$requirement
+               : $self->parse_version_requirement($requirement)
+      unless ref $requirement eq 'ARRAY';
+   for (my $i= 0; $i < @$requirement; $i += 2) {
+      my ($op, $rq_ver)= @{$requirement}[$i,$i+1];
+      return !!0 unless $op eq '>='? $version >= $rq_ver
+                      : $op eq '<='? $version <= $rq_ver
+                      : $op eq '=='? $version == $rq_ver
+                      : $op eq '!='? $version != $rq_ver
+                      : $op eq '<'?  $version < $rq_ver
+                      : $op eq '>'?  $version > $rq_ver
+                      : croak("Unhandled comparison op '$op'");
+   }
+   return !!1;
+}
+
+sub import_dist_from_archive($self, $pan, $author_path) {
+   my $dist_path= "authors/id/$author_path";
+   my $gitobj= $pan->get_path($dist_path)
+      or croak "No such file $dist_path in branch $pan";
+   my $existing= $self->get_path($dist_path);
+   # If exists, must be same gitobj as before or this is an error
+   if ($existing) {
+      croak "$dist_path already exists with different content"
+         unless $existing->id eq $gitobj->id;
+   }
+   # also copy the metadata file
+   my $meta_path= $pan->get_dist_metadata_path($author_path);
+   my $meta_blob= $pan->get_dist_metadata_blob($author_path);
+   $self->set_path($dist_path, $gitobj);
+   $self->set_path($meta_path, $meta_blob);
+   return 1;
 }
 
 =method patch_dist
