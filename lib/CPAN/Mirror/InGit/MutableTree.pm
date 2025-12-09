@@ -41,7 +41,7 @@ sub repo                 { shift->parent->repo }
 
 =method get_path
 
-  $path= $tree->get_path($path);
+  my ($git_obj, $mode)= @{ $tree->get_path($path) };
 
 =cut
 
@@ -121,6 +121,7 @@ sub set_path($self, $path, $data, %opts) {
       $node->{$basename}= defined $data? [ $data, $mode ] : undef;
    }
    $self->has_changes(1);
+   $self->{_changes} //= {};
    $self;
 }
 
@@ -132,6 +133,14 @@ sub _mkfile($path, $scalarref, $mode) {
       if defined $mode && $mode != 0100644;
 }
 
+=method update_tree
+
+  $tree->update_tree;
+
+Store any pending changes from L</set_path> into Git object storage and update the L</tree>
+attribute to point to the new Git::Raw::Tree.  This does not commit the tree to a branch.
+
+=cut
 
 sub update_tree($self) {
    # If using the Index, the index can write the new tree
@@ -172,6 +181,27 @@ sub _assemble_tree($repo, $tree, $changes) {
    return $treebuilder->write; # returns Git::Raw::Tree
 }
 
+=method commit
+
+  $commit= $tree->commit($message, %options);
+
+  # Options:
+  #   author        => Git::Raw::Signature
+  #   committer     => Git::Raw::Signature,
+  #   create_branch => $branch_name
+
+Commit any pending changes from L</set_path> and write a commit message for the change.
+IN order to make a commit, you must either be on a L</branch>, using the HEAD in the working
+directory, or specify the C<'create_branch'> option.
+
+If this tree is using the working directory, it updates the index and HEAD as if a user had
+run 'git commit' in the working directory.
+
+If you specify 'create_branch', it creates a new branch and updates the L</branch> attribute to
+refer to it.
+
+=cut
+
 sub commit($self, $message, %opts) {
    croak "No changes added" unless $self->has_changes;
    my $repo= $self->parent->repo;
@@ -179,36 +209,29 @@ sub commit($self, $message, %opts) {
    my $branch= $self->branch;
    my $cur_sig= $self->parent->new_signature;
    my $author= $opts{author} // $cur_sig;
+   my $update_head= $self->use_workdir // $opts{update_head};
    my $committer= $opts{committer} // $cur_sig;
-   my $commit;
-   if ($self->use_workdir) {
-      $commit= Git::Raw::Commit->create(
-         $repo, $message, $author, $committer,
-         [ $self->parent->repo->head->target ],
-         $self->tree) # lacking final param, it updates HEAD
-         or croak "commit failed";
-   }
-   elsif ($branch) {
-      $commit= Git::Raw::Commit->create(
-         $repo, $message, $author, $committer,
-         [ $self->branch->peel('commit') ],
-         $self->tree, undef) # undef final param means don't update HEAD
-         or croak "commit failed";
+   my $parents= $self->use_workdir? (
+                  # dies on new repo if HEAD doesn't exist yet, in which case no parents
+                  eval { [ $self->parent->repo->head->target ] } || []
+                )
+              : $branch? [ $self->branch->peel('commit') ]
+              : length $opts{create_branch}? [] # fresh branch, no parent commit
+              : croak "Can't commit without a branch or use_workdir or option create_branch";
+   # undef final param means don't update HEAD
+   my $commit= Git::Raw::Commit->create($repo, $message, $author, $committer, $parents, $self->tree, undef)
+      or croak "commit failed";
+   if ($opts{create_branch}) {
+      $branch= $repo->branch($opts{create_branch}, $commit);
+      $self->branch($branch);
+   } elsif ($branch) {
       # Update the branch
       $branch->target($commit);
    }
-   elsif (length $opts{create_branch}) {
-      $commit= Git::Raw::Commit->create(
-         $repo, $message, $author, $committer,
-         [], # fresh branch, no parent commit
-         $self->tree, undef) # undef final param means don't update HEAD
-         or croak "commit failed";
-      $branch= $repo->branch($opts{create_branch}, $commit);
-      $self->branch($branch);
-   }
-   else {
-      croak "Can't commit without a branch or use_workdir or option create_branch";
-   }
+   $repo->head($branch) if $branch && $update_head;
+   # persist the index state to disk, which clears the staged changes and brings the index
+   #  in sync with the commit
+   $repo->index->write if $self->use_workdir;
    $self->has_changes(0);
    return $commit;
 }
