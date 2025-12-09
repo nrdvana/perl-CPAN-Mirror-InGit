@@ -1,18 +1,17 @@
 #! /usr/bin/perl
-use FindBin;
-use lib "$FindBin::Bin/lib";
-use Test2AndUtils;
+use Test2::V0;
 use v5.36;
+
 my @pkgs= qw(
    CPAN::Mirror::InGit
    CPAN::Mirror::InGit::MirrorTree
+   CPAN::Mirror::InGit::ArchiveTree
 );
 
 ok( eval "require $_", $_ )
-   or diag $@ and BAIL_OUT("use $_")
+   or diag $@ && bail_out("Compile error in $_")
    for @pkgs;
 
-diag "Testing on Perl $], $^X\n"
-	.join('', map { sprintf("%-40s  %s\n", $_, $_->VERSION) } @pkgs);
+diag "Testing on Perl $], $^X\n";
 
 done_testing;

@@ -225,13 +225,13 @@ These are the module requirements needed for installation via CPAN with testing 
 
 sub get_dist_prereqs($self, $author_path, %options) {
    my $meta_path= $self->meta_path_for_dist($author_path);
-   my $meta_blob= $peer->get_path($meta_path);
+   my $meta_blob= $self->get_path($meta_path);
    if ($meta_blob) {
       my $meta= JSON::PP->new->decode($meta_blob->content);
       my %prereqs;
       # TODO: let %options configure this
       for (qw( configure runtime test )) {
-         %prereqs= ( %prereqs, $meta->{prereqs}{$_}{requires}->%* );
+         %prereqs= ( %prereqs, $meta->{prereqs}{$_}{requires}->%* )
             if $meta->{prereqs} && $meta->{prereqs}{$_} && $meta->{prereqs}{$_}{requires};
       }
       return \%prereqs;
@@ -287,18 +287,18 @@ sub import_modules($self, $reqs, %options) {
    my @todo= sort keys %$reqs;
    while (@todo) {
       my $mod= shift @todo;
-      my @req_version= @{ $self->parse_version_requirement($reqs->{$mod}) };
+      my $req_version= $self->parse_version_requirement($reqs->{$mod});
       # Is this requirement already satisfied?
       # CoreList can only really test '>=' operator.  Ignore the rest of the spec...
-      next if $req_version[0] eq '>='
-           && Module::CoreList::is_core($mod, $req_version[1], $corelist_perl_version);
+      next if $req_version->[0] eq '>='
+           && Module::CoreList::is_core($mod, $req_version->[1], $corelist_perl_version);
       my $current= $self->package_details->{by_module}{$mod};
       next if $current && $self->check_version($req_version, $current->[1]);
       # Walk through the list of import sources looking for a version that works
       my $prereqs;
-      for my $src (@$sources) {
+      for my $peer (@$sources) {
          my $mod_in_peer= $peer->package_details->{by_module}{$mod};
-         my (undef, $peer_ver, $peer_author_path)= @$mod_in_peer;
+         my (undef, $peer_ver, $author_path)= @$mod_in_peer;
          if ($mod_in_peer && $self->check_version($req_version, $peer_ver)) {
             $self->import_dist($peer, $author_path);
             $prereqs= $self->get_dist_prereqs($author_path);
@@ -309,7 +309,7 @@ sub import_modules($self, $reqs, %options) {
          unless $prereqs;
       # Push things into the TODO list if they aren't already in %$reqs or if they have a higher
       # version requirement.
-      for (keys $prereqs) {
+      for (keys %$prereqs) {
          my $prev= $reqs->{$_} || 0;
          my $new= $self->combine_version_requirements($prev, $prereqs->{$_});
          if (!exists $reqs->{$_} or $new ne $prev) {
@@ -339,7 +339,7 @@ sub combine_version_requirements($self, @reqs) {
    my @ne;
    for my $req (@reqs) {
       my $pairs= $self->parse_version_requirement($req);
-      for (my $i= 0; $i < $#pairs; $i += 2) {
+      for (my $i= 0; $i < $#$pairs; $i += 2) {
          my ($op, $num)= @{$pairs}[$i,$i+1];
          if ($op eq '!=') {
             push @ne, $num unless grep $_ eq $num, @ne;
