@@ -55,7 +55,11 @@ This stages the change (see L<CPAN::Mirror::InGit::MutableTree>) but does not co
 
 =cut
 
-has config => ( is => 'rw', lazy => 1, builder => 'load_config' );
+sub BUILD($self, $args, @) {
+   $self->load_config if $self->config_blob;
+}
+
+has config => ( is => 'rw' );
 
 sub config_blob($self) {
    my $ent= $self->get_path('cpan_ingit.json')
@@ -68,11 +72,21 @@ sub load_config($self) {
       or die "Missing '/cpan_ingit.json'";
    my $attrs= JSON::PP->new->utf8->relaxed->decode($cfg_blob->content);
    ref $attrs eq 'HASH' or croak "Configuration file does not contain an object?";
-   return $self->{config}= $attrs;
+   $self->{config}= $attrs;
+   $self->_unpack_config($self->{config});
+   $attrs;
+}
+
+sub _unpack_config($self, $config) {
+}
+
+sub _pack_config($self, $config) {
 }
 
 sub write_config($self) {
-   my $json= JSON::PP->new->utf8->canonical->pretty->encode($self->config);
+   my $config= $self->config;
+   $self->_pack_config($config);
+   my $json= JSON::PP->new->utf8->canonical->pretty->encode($config);
    $self->set_path('cpan_ingit.json', \$json)
       unless $self->config_blob->content eq $json;
    $self;
@@ -102,7 +116,7 @@ sub package_details_blob($self) {
    return $ent->[0]->is_blob? $ent->[0] : undef;
 }
 
-has package_details => ( is => 'rw', lazy => 1 );
+has package_details => ( is => 'rw', lazy => 1, clearer => 1 );
 sub _build_package_details($self) {
    $self->parse_package_details($self->package_details_blob->content);
 }
@@ -188,15 +202,15 @@ This can change ownership of modules to this dist from another dist that claimed
 
 sub import_dist($self, $peer, $author_path, %options) {
    my $dist_path= "authors/id/$author_path";
-   my $distfile_obj= $peer->get_path($dist_path)
+   my $distfile_ent= $peer->get_path($dist_path)
       or croak "Other tree does not contain $dist_path";
-   my $existing= $self->get_path($dist_path);
+   my $existing_ent= $self->get_path($dist_path);
    # If exists, must be same gitobj as before or this is an error
-   if ($existing) {
+   if ($existing_ent) {
       croak "$dist_path already exists with different content"
-         unless $existing->id eq $distfile_obj->id;
+         unless $existing_ent->[0]->id eq $distfile_ent->[0]->id;
    }
-   $self->set_path($dist_path, $distfile_obj);
+   $self->set_path($dist_path, $distfile_ent->[0], mode => $distfile_ent->[1]);
    my $modules_registered= $peer->package_details->{by_dist}{$author_path};
    if ($modules_registered) {
       $self->package_details->{by_dist}{$author_path}= [ @$modules_registered ];
@@ -205,9 +219,9 @@ sub import_dist($self, $peer, $author_path, %options) {
       $self->write_package_details;
    }
    my $meta_path= $self->meta_path_for_dist($author_path);
-   my $meta_blob= $peer->get_path($meta_path);
-   if ($meta_blob) {
-      $self->set_path($meta_path, $meta_blob)
+   my $meta_ent= $peer->get_path($meta_path);
+   if ($meta_ent) {
+      $self->set_path($meta_path, $meta_ent->[0], mode => $meta_ent->[1]);
    } else {
       ... # TODO: parse module for META.json and dependnecies
    }
@@ -225,9 +239,9 @@ These are the module requirements needed for installation via CPAN with testing 
 
 sub get_dist_prereqs($self, $author_path, %options) {
    my $meta_path= $self->meta_path_for_dist($author_path);
-   my $meta_blob= $self->get_path($meta_path);
-   if ($meta_blob) {
-      my $meta= JSON::PP->new->decode($meta_blob->content);
+   my $meta_ent= $self->get_path($meta_path);
+   if ($meta_ent) {
+      my $meta= JSON::PP->new->decode($meta_ent->[0]->content);
       my %prereqs;
       # TODO: let %options configure this
       for (qw( configure runtime test )) {
