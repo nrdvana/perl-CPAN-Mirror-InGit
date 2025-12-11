@@ -39,6 +39,19 @@ has has_changes       => ( is => 'rw' );
 has use_workdir       => ( is => 'rw' );
 sub repo                 { shift->parent->repo }
 
+sub BUILD($self, $args, @) {
+   # branch supplied by name? look it up
+   if (defined $self->{branch} && !ref $self->{branch}) {
+      my $b= Git::Raw::Branch->lookup($self->parent->repo, $self->{branch}, 1)
+         or croak "No local branch named '$self->{branch}'";
+      $self->{branch}= $b;
+   }
+   # If branch supplied and tree was not, look up the tree
+   if ($self->{branch} && !$self->{tree}) {
+      $self->{tree}= $self->{branch}->peel('tree');
+   }
+}
+
 =method get_path
 
   my ($git_obj, $mode)= @{ $tree->get_path($path) };

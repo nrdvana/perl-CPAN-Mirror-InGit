@@ -47,8 +47,10 @@ sub _pack_config($self, $config) {
    $config->{upstream_url}= $self->upstream_url;
    $config->{autofetch}= $self->autofetch;
    $config->{package_details_max_age}= $self->package_details_max_age;
+   $self->next::method($config);
 }
 sub _unpack_config($self, $config) {
+   $self->next::method($config);
    $self->upstream_url($config->{upstream_url});
    $self->autofetch($config->{autofetch});
    $self->package_details_max_age($config->{package_details_max_age});

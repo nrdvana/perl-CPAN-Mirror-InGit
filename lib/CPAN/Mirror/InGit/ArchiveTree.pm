@@ -78,9 +78,13 @@ sub load_config($self) {
 }
 
 sub _unpack_config($self, $config) {
+   $self->default_import_sources($config->{default_import_sources});
+   $self->corelist_perl_version($config->{corelist_perl_version});
 }
 
 sub _pack_config($self, $config) {
+   $config->{default_import_sources}= $self->default_import_sources;
+   $config->{corelist_perl_version}=  $self->corelist_perl_version;
 }
 
 sub write_config($self) {
@@ -91,6 +95,20 @@ sub write_config($self) {
       unless $self->config_blob->content eq $json;
    $self;
 }
+
+=attribute default_import_sources
+
+List of other branch names which the L</import_modules> should search.
+
+=attribute corelist_perl_version
+
+Version of perl which should be considered when deciding whether a module already exists in the
+core distribution or whether it should be fetched from CPAN.
+
+=cut
+
+has default_import_sources => ( is => 'rw' );
+has corelist_perl_version  => ( is => 'rw' );
 
 =attribute package_details
 
@@ -116,7 +134,7 @@ sub package_details_blob($self) {
    return $ent->[0]->is_blob? $ent->[0] : undef;
 }
 
-has package_details => ( is => 'rw', lazy => 1, clearer => 1 );
+has package_details => ( is => 'rw', lazy => 1, builder => 1, clearer => 1 );
 sub _build_package_details($self) {
    $self->parse_package_details($self->package_details_blob->content);
 }
@@ -162,7 +180,7 @@ This adds it to the pending changes to the tree, but does not commit it.
 sub write_package_details($self) {
    my $url= $self->config->{canonical_url} // 'cpan_mirror_ingit.local';
    my @mod_list= values %{$self->package_details->{by_module}};
-   my $line_count= 9 + @mod_list;
+   my $line_count= @mod_list;
    my $date= strftime("%a, %d %b %Y %H:%M:%S GMT", gmtime);
    my $content= <<~END;
       File:         02packages.details.txt
@@ -337,7 +355,7 @@ sub import_modules($self, $reqs, %options) {
 sub parse_version_requirement($self, $spec) {
    my @requirements;
    for (split ',', $spec) {
-      /^\s*(?:(<|<=|>|>=|==|!=)\s*)?(v?[0-9]\.[0-9_\.]*)\s*\z/
+      /^\s*(?:(<|<=|>|>=|==|!=)\s*)?(v?[0-9]+(\.[0-9_\.]+)?)\s*\z/
          or croak "Invalid version requirement '$spec'";
       my $op= $1 // '>=';
       my $ver= version->parse($2);
@@ -347,12 +365,11 @@ sub parse_version_requirement($self, $spec) {
 }
 
 # For requirements like ">=1.1" and ">=1.2", simplify that into just ">=1.2"
-# There are lots of edge cases not handled here.  Hopefully I don't need to...
 sub combine_version_requirements($self, @reqs) {
    my %per_op;
    my @ne;
    for my $req (@reqs) {
-      my $pairs= $self->parse_version_requirement($req);
+      my $pairs= ref $req eq 'ARRAY'? $req : $self->parse_version_requirement($req);
       for (my $i= 0; $i < $#$pairs; $i += 2) {
          my ($op, $num)= @{$pairs}[$i,$i+1];
          if ($op eq '!=') {
@@ -372,7 +389,35 @@ sub combine_version_requirements($self, @reqs) {
          }
       }
    }
-   return join ',', map($_ . $per_op{$_}, sort keys %per_op), map("!=$_", @ne);
+   # If '==' requested, verify it matches the rest of the requirements
+   if (defined $per_op{'=='}) {
+      my $single_ver= $per_op{'=='};
+      for (grep $_ ne '==', keys %per_op) {
+         $self->check_version([ $_ => $per_op{$_} ], $single_ver)
+            or croak "Version requirement '$_$per_op{$_}' conflicts with '==$single_ver'";
+      }
+      return ['==', $per_op{'=='}];
+   }
+   # Collapse '>' and '>='
+   my ($min_req, $max_req);
+   if (defined $per_op{'>='} && (!defined $per_op{'>'} || $per_op{'>='} > $per_op{'>'})) {
+      $min_req= [ '>=', $per_op{'>='} ];
+   } elsif (defined $per_op{'>'}) {
+      $max_req= [ '>', $per_op{'>'} ];
+   }
+   # Collapse '<' and '<='
+   if (defined $per_op{'<='} && (!defined $per_op{'<'} || $per_op{'<='} < $per_op{'<'})) {
+      $max_req= [ '<=', $per_op{'<='} ];
+   } elsif (defined $per_op{'<'}) {
+      $max_req= [ '<', $per_op{'<'} ];
+   }
+   # verify '>' and '<' are consistent
+   if ($min_req && $max_req) {
+      $self->check_version($min_req, $max_req->[1])
+      && $self->check_version($max_req, $min_req->[1])
+      or croak "Version requirement '@$min_req' conflicts with '@$max_req'";
+   }
+   return [ @{$min_req||[]}, @{$max_req||[]}, map +('!=', $_), @ne ];
 }
 
 sub check_version($self, $requirement, $version) {
