@@ -65,20 +65,11 @@ your environment for each application.
 
 =head1 ATTRIBUTES
 
-=head2 repo
+=head2 git_repo
 
 An instance of L<Git::Raw::Repository> (which wraps libgit2.so) for accessing the git structures.
 You can pass this attribute to the constructor as a simple directory path which gets inflated
 to a Repository object.
-
-=head2 upstream_mirrors
-
-The URL of the upstream CPAN mirror, from which packages will be fetched.
-
-=head2 dist_cache_branch_name
-
-The git branch name used for holding package files.  This prevents files from getting fetched
-multiple times as they are pulled into other branches.
 
 =head2 git_author_name
 
@@ -94,17 +85,21 @@ The L<Mojo::UserAgent> object used when downloading files from the real CPAN.
 
 =cut
 
-has repo                      => ( is => 'ro', required => 1, coerce => \&_open_repo );
-has upstream_mirrors          => ( is => 'ro', required => 1, coerce => \&_coerce_upstreams,
-                                   default => 'https://www.cpan.org' );
-has dist_cache_branch_name    => ( is => 'ro', default => 'dist-cache' );
+sub BUILDARGS($class, @list) {
+   unshift @list, 'git_repo' if @list == 1;
+   my $args= $class->next::method(@list);
+   $args->{git_repo}= delete $args->{repo} if defined $args->{repo};
+   $args;
+}
+
+has git_repo                  => ( is => 'ro', required => 1, coerce => \&_open_repo );
 has git_author_name           => ( is => 'rw', default => 'CPAN::Mirror::InGit' );
 has git_author_email          => ( is => 'rw', default => 'CPAN::Mirror::InGit@localhost' );
 
 has workdir_branch_name       => ( is => 'lazy' );
 sub _build_workdir_branch_name($self) {
-   return undef if $self->repo->is_bare || $self->repo->is_head_detached;
-   return $self->repo->head->shorthand;
+   return undef if $self->git_repo->is_bare || $self->git_repo->is_head_detached;
+   return $self->git_repo->head->shorthand;
 }
 
 has useragent                 => ( is => 'lazy' );
@@ -118,84 +113,69 @@ sub _open_repo($thing) {
    return Git::Raw::Repository->open("$thing");
 }
 
-sub _coerce_upstreams {
-   my @list= ref $_[0] eq 'ARRAY'? @{$_[0]} : ($_[0]);
-   for (@list) {
-      # Convert strings to URLs
-      $_= { url => $_ } unless ref $_;
-   }
-   return \@list;
-}
-
 =head1 METHODS
 
-=head2 mirror
+=head2 get_archive_tree
 
-  $mirror= $cpan_repo->mirror($branch_or_tag_or_id);
+  $mirror= $cpan_repo->get_archive_tree($branch_or_tag_or_id);
 
-Return a L<MirrorTree object|CPAN::Mirror::InGit::MirrorTree> for the given
-branch name, git tag, or commit hash.  This branch must look like a mirror
-(having modules/02packages.details.txt) or it will return C<undef>, unless you
-specify C<$create>, in which case the branch will be fleshed out with the
-necessary files.  If C<$create> is specified, the C<$branch_or_tag_or_id> must
-be a branch name or L<Git::Raw::Branch> object.
+Return a L<ArchiveTree object|CPAN::Mirror::InGit::ArchiveTree> for the given
+branch name, git tag, or commit hash.  This branch must look like an archive
+(having C<< /cpan_ingit.json >>) or it will return C<undef>.
 
 =cut
 
-sub mirror($self, $branch_or_tag_or_id=undef) {
-   # If branch/tag/id is omitted, use the working dir of the repo
-   unless (defined $branch_or_tag_or_id) {
-      croak "Can't use default branch on a bare repo"
-         if $self->repo->is_bare;
-      $branch_or_tag_or_id= $self->workdir_branch_name;
-   }
+sub get_archive_tree($self, $branch_or_tag_or_id) {
    my ($tree, $origin)= $self->lookup_tree($branch_or_tag_or_id);
    return undef unless $tree;
 
    my $branch= $origin && ref($origin)->isa('Git::Raw::Branch')? $origin : undef;
-   # undefined, or the same branch pointed to by HEAD mean that it should use the working tree
-   my $use_workdir= !$self->repo->is_bare && (!defined $origin || ($branch && $branch->is_head));
-   my $mirror= CPAN::Mirror::InGit::MirrorTree->new(
+
+   # If HEAD requested or using the branch pointed to by HEAD, and if it has a work directory,
+   # then apply any changes to the workdir.
+   my $use_workdir= !$self->git_repo->is_bare && (($branch && $branch->is_head) || $branch_or_tag_or_id eq 'HEAD');
+
+   # Does it look like an ArchiveTree?
+   if ($use_workdir) {
+      my $ent= $self->git_repo->index->find('cpan_ingit.json');
+      return undef unless $ent;
+   } else {
+      my $ent= $tree->entry_bypath('cpan_ingit.json');
+      return undef unless $ent;
+   }
+   return CPAN::Mirror::InGit::ArchiveTree->new(
       parent => $self,
       tree => $tree,
-      (branch => $branch)x!!$branch,
       use_workdir => $use_workdir,
+      (branch => $branch)x!!$branch,
    );
-   # To be recognized as a mirror, the tree must contain cpan_ingit.json and modules/02packages.details.txt
-   return undef unless $mirror->package_details_blob && $mirror->config_blob;
-   $mirror->load_config;
-   return $mirror;
 }
 
-=head2 create_mirror
+=head2 create_archive_tree
 
-  $mirror= $cpan_repo->create_mirror($branch_name, %params);
+  $mirror= $cpan_repo->create_archive_tree($branch_name, %params);
 
-Create a new mirror brawnch.  The branch must not already exist.
+Create a new mirror branch.  The branch must not already exist.
 
 =cut
 
-sub create_mirror($self, $name, %params) {
+sub create_archive_tree($self, $name, %params) {
    croak "Branch '$name' already exists"
-      if Git::Raw::Branch->lookup($self->repo, $name, 1);
+      if Git::Raw::Branch->lookup($self->git_repo, $name, 1);
    croak "Branch '$name' already exists upstream"
-      if Git::Raw::Branch->lookup($self->repo, $name, 0);
-   my $mirror= CPAN::Mirror::InGit::MirrorTree->new(%params, parent => $self);
+      if Git::Raw::Branch->lookup($self->git_repo, $name, 0);
+   my $t;
+   if ($params{upstream_url}) {
+      $t= CPAN::Mirror::InGit::MirrorTree->new(%params, parent => $self);
+      $t->add_upstream_package_details;
+   } else {
+      $t= CPAN::Mirror::InGit::ArchiveTree->new(%params, parent => $self);
+      $t->write_package_details;
+   }
    # It won't exist until we create a commit and create a branch.
-   if (length $mirror->upstream_url) {
-      # Initial commit will just be the cpan_ingit.json and packages.details.txt file
-      $mirror->fetch_upstream_package_details;
-      $mirror->write_config;
-      $mirror->update_tree;
-      $mirror->commit("New branch mirroring ".$mirror->upstream_url, create_branch => $name);
-   }
-   else {
-      $mirror->write_config;
-      $mirror->write_package_details;
-      $mirror->update_tree;
-      $mirror->commit("New empty CPAN tree", create_branch => $name);
-   }
-   return $mirror;
+   $t->write_config;
+   $t->commit("Called create_archive_tree", create_branch => $name);
+   return $t;
 }
 
 =head2 lookup_tree
@@ -212,25 +192,29 @@ Returns C<undef> if not found.  In list context, it returns both the tree and th
 sub lookup_tree($self, $branch_or_tag_or_id) {
    my ($tree, $origin);
    defined $branch_or_tag_or_id or croak "missing argument";
+   my $repo= $self->git_repo;
    if (blessed($branch_or_tag_or_id) && (
          $branch_or_tag_or_id->isa('Git::Raw::Branch')
       || $branch_or_tag_or_id->isa('Git::Raw::Tag')
    )) {
       $origin= $branch_or_tag_or_id;
       $tree= $origin->peel('tree');
-   }
-   elsif ($origin= eval { Git::Raw::Branch->lookup($self->repo, $branch_or_tag_or_id, 1) }) {
+   } elsif ($branch_or_tag_or_id eq 'HEAD') {
+      $tree= $repo->head->target->peel('tree');
+      $origin= $repo->is_head_detached? undef
+             : $repo->head;
+   } elsif ($origin= eval { Git::Raw::Branch->lookup($repo, $branch_or_tag_or_id, 1) }) {
       $tree= $origin->peel('tree');
-   } elsif ($origin= eval { Git::Raw::Tag->lookup($self->repo, $branch_or_tag_or_id) }) {
+   } elsif ($origin= eval { Git::Raw::Tag->lookup($repo, $branch_or_tag_or_id) }) {
       $tree= $origin->peel('tree');
-   } elsif (my $obj= eval { $self->repo->lookup($branch_or_tag_or_id) }) {
+   } elsif (my $obj= eval { $repo->lookup($branch_or_tag_or_id) }) {
       if ($obj->type == Git::Raw::Object::COMMIT()) {
-         $origin= Git::Raw::Commit->lookup($self->repo, $obj->id);
+         $origin= Git::Raw::Commit->lookup($repo, $obj->id);
          $tree= $origin->tree;
       } elsif ($obj->type == Git::Raw::Object::TREE()) {
-         $tree= Git::Raw::Tree->lookup($self->repo, $obj->id);
+         $tree= Git::Raw::Tree->lookup($repo, $obj->id);
       } elsif ($obj->type == Git::Raw::Object::TAG()) {
-         $origin= Git::Raw::Tag->lookup($self->repo, $obj->id);
+         $origin= Git::Raw::Tag->lookup($repo, $obj->id);
          $tree= $origin->target;
       }
    }

@@ -125,7 +125,7 @@ sub add_upstream_package_details($self, %options) {
    my $txt;
    gunzip $content_ref => \$txt
       or croak "gunzip failed: $GunzipError";
-   my $blob= Git::Raw::Blob->create($self->parent->repo, $txt);
+   my $blob= Git::Raw::Blob->create($self->git_repo, $txt);
    $self->set_path('modules/02packages.details.txt', $blob);
    $self->{_blob_last_update}{$blob->id}= time;
    return $blob;
@@ -144,7 +144,7 @@ sub add_upstream_author_file($self, $author_path, %options) {
    my $path= "authors/id/$author_path";
    my $content_ref= $self->fetch_upstream_file($path, %options)
       or return undef;
-   my $blob= Git::Raw::Blob->create($self->parent->repo, $$content_ref);
+   my $blob= Git::Raw::Blob->create($self->git_repo, $$content_ref);
    $self->set_path($path, $blob);
    return $blob;
 }

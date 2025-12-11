@@ -37,12 +37,12 @@ has tree              => ( is => 'rw' );
 has _changes          => ( is => 'rw' );
 has has_changes       => ( is => 'rw' );
 has use_workdir       => ( is => 'rw' );
-sub repo                 { shift->parent->repo }
+sub git_repo             { shift->parent->git_repo }
 
 sub BUILD($self, $args, @) {
    # branch supplied by name? look it up
    if (defined $self->{branch} && !ref $self->{branch}) {
-      my $b= Git::Raw::Branch->lookup($self->parent->repo, $self->{branch}, 1)
+      my $b= Git::Raw::Branch->lookup($self->git_repo, $self->{branch}, 1)
          or croak "No local branch named '$self->{branch}'";
       $self->{branch}= $b;
    }
@@ -70,7 +70,7 @@ sub get_path($self, $path) {
          return $node->{$basename} if ref $node eq 'HASH' && $node->{$basename};
       }
       if ($self->use_workdir) {
-         my $ent= $self->parent->repo->index->find($path);
+         my $ent= $self->git_repo->index->find($path);
          return [ $ent->blob, $ent->mode ]
             if $ent;
       }
@@ -96,12 +96,12 @@ Add (or remove) a blob at a path within the tree.
 sub set_path($self, $path, $data, %opts) {
    # Two modes: we can be writing to the working directory and index, or be building a new tree
    # (which may or may not be connected to a branch)
-   my $repo= $self->parent->repo;
+   my $repo= $self->git_repo;
    my $mode= $opts{mode} // 0100644;
    my @path= split m{/+}, $path;
    my $basename= pop @path;
    if ($self->use_workdir) {
-      my $fullpath= $self->parent->repo->workdir;
+      my $fullpath= $self->git_repo->workdir;
       # create missing directories
       for (@path) {
          $fullpath .= '/'.$_;
@@ -111,14 +111,14 @@ sub set_path($self, $path, $data, %opts) {
       $fullpath .= '/'.$basename;
       if (!defined $data) {
          unlink($fullpath);
-         $self->parent->repo->index->remove($path);
+         $self->git_repo->index->remove($path);
       } else {
          # a shame there's no way to add the blob directly...
          $data= \$data->content if ref($data)->isa('Git::Raw::Blob');
          # Write file
          _mkfile($fullpath, $data, $mode);
          # Add to the index
-         $self->parent->repo->index->add_frombuffer($path, $data, $mode);
+         $self->git_repo->index->add_frombuffer($path, $data, $mode);
       }
    }
    else {
@@ -158,9 +158,9 @@ attribute to point to the new Git::Raw::Tree.  This does not commit the tree to 
 sub update_tree($self) {
    # If using the Index, the index can write the new tree
    if ($self->use_workdir) {
-      $self->tree($self->parent->repo->index->write_tree);
+      $self->tree($self->git_repo->index->write_tree);
    } else {
-      $self->tree(_assemble_tree($self->parent->repo, $self->tree, $self->_changes));
+      $self->tree(_assemble_tree($self->git_repo, $self->tree, $self->_changes));
       $self->_changes({}); # reset the changes hash
    }
    # don't reset has_changes until it has been committed
@@ -217,7 +217,7 @@ refer to it.
 
 sub commit($self, $message, %opts) {
    croak "No changes added" unless $self->has_changes;
-   my $repo= $self->parent->repo;
+   my $repo= $self->git_repo;
    $self->update_tree;
    my $branch= $self->branch;
    my $cur_sig= $self->parent->new_signature;
@@ -226,7 +226,7 @@ sub commit($self, $message, %opts) {
    my $committer= $opts{committer} // $cur_sig;
    my $parents= $self->use_workdir? (
                   # dies on new repo if HEAD doesn't exist yet, in which case no parents
-                  eval { [ $self->parent->repo->head->target ] } || []
+                  eval { [ $self->git_repo->head->target ] } || []
                 )
               : $branch? [ $self->branch->peel('commit') ]
               : length $opts{create_branch}? [] # fresh branch, no parent commit

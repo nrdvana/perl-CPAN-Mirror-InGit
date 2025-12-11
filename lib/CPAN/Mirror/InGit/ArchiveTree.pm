@@ -26,6 +26,7 @@ use POSIX 'strftime';
 use IO::Uncompress::Gunzip qw( gunzip $GunzipError );
 use JSON::PP;
 use Time::Piece;
+use Log::Any '$log';
 use Moo;
 use v5.36;
 
@@ -57,8 +58,11 @@ This stages the change (see L<CPAN::Mirror::InGit::MutableTree>) but does not co
 
 sub BUILD($self, $args, @) {
    $self->load_config if $self->config_blob;
+   $self->name($self->branch? $self->branch->shorthand : '(anonymous)')
+      unless defined $self->name;
 }
 
+has name   => ( is => 'rw' );
 has config => ( is => 'rw' );
 
 sub config_blob($self) {
@@ -71,7 +75,7 @@ sub load_config($self) {
    my $cfg_blob= $self->config_blob
       or die "Missing '/cpan_ingit.json'";
    my $attrs= JSON::PP->new->utf8->relaxed->decode($cfg_blob->content);
-   ref $attrs eq 'HASH' or croak "Configuration file does not contain an object?";
+   ref $attrs eq 'HASH' or croak "Configuration file does not contain an object?".$cfg_blob->content;
    $self->{config}= $attrs;
    $self->_unpack_config($self->{config});
    $attrs;
@@ -80,21 +84,27 @@ sub load_config($self) {
 sub _unpack_config($self, $config) {
    $self->default_import_sources($config->{default_import_sources});
    $self->corelist_perl_version($config->{corelist_perl_version});
+   $self->canonical_url($config->{canonical_url});
 }
 
 sub _pack_config($self, $config) {
+   $config->{canonical_url}= $self->canonical_url;
    $config->{default_import_sources}= $self->default_import_sources;
    $config->{corelist_perl_version}=  $self->corelist_perl_version;
 }
 
 sub write_config($self) {
-   my $config= $self->config;
+   my $config= $self->config // {};
    $self->_pack_config($config);
    my $json= JSON::PP->new->utf8->canonical->pretty->encode($config);
    $self->set_path('cpan_ingit.json', \$json)
-      unless $self->config_blob->content eq $json;
+      unless $self->config_blob && $self->config_blob->content eq $json;
    $self;
 }
+
+=attribute canonical_url
+
+The URL to be advertised in 02packages.details.txt, when written by this module.
 
 =attribute default_import_sources
 
@@ -107,6 +117,7 @@ core distribution or whether it should be fetched from CPAN.
 
 =cut
 
+has canonical_url          => ( is => 'rw' );
 has default_import_sources => ( is => 'rw' );
 has corelist_perl_version  => ( is => 'rw' );
 
@@ -178,8 +189,11 @@ This adds it to the pending changes to the tree, but does not commit it.
 =cut
 
 sub write_package_details($self) {
-   my $url= $self->config->{canonical_url} // 'cpan_mirror_ingit.local';
-   my @mod_list= values %{$self->package_details->{by_module}};
+   my $url= $self->canonical_url // 'cpan_mirror_ingit.local';
+   # on initial creation, need to write an empty package_details without triggering
+   # lazy-build of package_details
+   my @mod_list= !$self->package_details_blob? ()
+               : values %{$self->package_details->{by_module}};
    my $line_count= @mod_list;
    my $date= strftime("%a, %d %b %Y %H:%M:%S GMT", gmtime);
    my $content= <<~END;
@@ -202,6 +216,48 @@ sub write_package_details($self) {
    $self->set_path('modules/02packages.details.txt', \join('', $content, @lines));
 }
 
+=method has_module
+
+  $bool= $atree->has_module($mod_name);
+  $bool= $atree->has_module($mod_name, $version_requirement);
+
+=method get_module_version
+
+  $ver= $atree->get_module_version($mod_name);
+
+=method get_module_dist
+
+  $ver= $atree->get_module_dist($mod_name);
+
+=cut
+
+sub has_module($self, $mod_name, $reqs=undef) {
+   my $mod_ver= $self->get_module_version($mod_name);
+   if (defined $mod_ver && defined $reqs) {
+      $reqs= CPAN::Meta::Requirements->from_string_hash({ $mod_name => $reqs })
+         unless ref $reqs;
+      return !!$reqs->accepts_module($mod_name, $mod_ver);
+   }
+   return defined $mod_ver;
+}
+
+sub get_module_version($self, $mod_name) {
+   my $current= $self->package_details->{by_module}{$mod_name}
+      or return undef;
+   my $mod_ver= $current->[1];
+   # grab the version out of the package filename?
+   if (!defined $mod_ver) {
+      $mod_ver= $current->[2] =~ /-([0-9]+(?:\.[0-9_]+?)*)\./? $1
+              : 0; # return 0 to differentiate from undef=nonexisting
+   }
+   return $mod_ver;
+}
+
+sub get_module_dist($self, $mod_name) {
+   my $by_name= $self->package_details->{by_module}{$mod_name};
+   return $by_name? $by_name->[2] : undef;
+}
+
 sub meta_path_for_dist($self, $author_path) {
    # replace archive extension with '.meta.json'
    $author_path =~ s/\.(zip|tar\.gz|tgz|tar\.bz2|tbz2)\z//;
@@ -221,7 +277,8 @@ This can change ownership of modules to this dist from another dist that claimed
 sub import_dist($self, $peer, $author_path, %options) {
    my $dist_path= "authors/id/$author_path";
    my $distfile_ent= $peer->get_path($dist_path)
-      or croak "Other tree does not contain $dist_path";
+      or croak "Import source branch '".$peer->name."' does not contain $dist_path";
+   $log->info("Importing $author_path from ".$peer->name." to ".$self->name);
    my $existing_ent= $self->get_path($dist_path);
    # If exists, must be same gitobj as before or this is an error
    if ($existing_ent) {
@@ -241,37 +298,26 @@ sub import_dist($self, $peer, $author_path, %options) {
    if ($meta_ent) {
       $self->set_path($meta_path, $meta_ent->[0], mode => $meta_ent->[1]);
    } else {
-      ... # TODO: parse module for META.json and dependnecies
+      # TODO: parse module for META.json and dependnecies
+      $log->warn("No META for $author_path");
    }
    return $self;
 }
 
-=method get_dist_prereqs
+=method get_dist_meta
 
-  $prereqs_hash= $archive_tree->get_dist_prereqs($author_path);
+  $prereqs= $archive_tree->get_dist_meta($author_path);
 
-Return the requirements for 'configure', 'runtime', and 'test' merged into a single hash.
-These are the module requirements needed for installation via CPAN with testing enabled.
+Return the CPAN::Meta for the distribution, or C<undef> if unknown.
 
 =cut
 
-sub get_dist_prereqs($self, $author_path, %options) {
+sub get_dist_meta($self, $author_path, %options) {
    my $meta_path= $self->meta_path_for_dist($author_path);
    my $meta_ent= $self->get_path($meta_path);
-   if ($meta_ent) {
-      my $meta= JSON::PP->new->decode($meta_ent->[0]->content);
-      my %prereqs;
-      # TODO: let %options configure this
-      for (qw( configure runtime test )) {
-         %prereqs= ( %prereqs, $meta->{prereqs}{$_}{requires}->%* )
-            if $meta->{prereqs} && $meta->{prereqs}{$_} && $meta->{prereqs}{$_}{requires};
-      }
-      return \%prereqs;
-   }
-   else {
-      warn "Unknown dependnencies for $author_path (no meta file)\n";
-      return {};
-   }
+   return CPAN::Meta->load_string($meta_ent->[0]->content)
+      if $meta_ent;
+   # TODO: process the tar file to generate the meta
 }
 
 =method import_modules
@@ -300,143 +346,119 @@ working branch, the index also gets updated.
 
 =cut
 
+sub _filter_prereqs($self, $reqs, $corelist={}) {
+   for my $mod (sort $reqs->required_modules) {
+      my $req_version= $reqs->requirements_for_module($mod);
+      my $have_ver= $self->get_module_version($mod);
+      # Is this requirement already in the tree?
+      if (defined $have_ver && $reqs->accepts_module($mod, $have_ver)) {
+         $log->debugf('  requirement %s %s satisfied by existing version %s from %s',
+            $mod, $req_version, $have_ver, $self->get_module_dist($mod))
+            if $log->is_debug;
+         $reqs->clear_requirement($mod);
+      }
+      elsif (defined $corelist->{$mod} && $reqs->accepts_module($mod, $corelist->{$mod})) {
+         $log->debugf('  requirement %s %s satisfied by corelist', $mod, $req_version);
+         $reqs->clear_requirement($mod);
+      }
+   }
+   return $reqs;
+}
+
+# merges new requirements into existing, and returns a list of anything that changed
+sub _merge_prereqs($self, $reqs, $new_reqs) {
+   my $before= $reqs->as_string_hash;
+   $reqs->add_requirements($new_reqs);
+   my $after= $reqs->as_string_hash;
+   my @changed;
+   for my $mod (sort $new_reqs->required_modules) {
+      if (($before->{$mod} // '') ne ($after->{$mod} // 0)) {
+         push @changed, $mod;
+         $log->infof('  added requirement %s%s', $mod, $after->{$mod}? " ver. $after->{$mod}" : '');
+      }
+   }
+   return @changed;
+}
+
 sub import_modules($self, $reqs, %options) {
    require Module::CoreList;
    # None of our projects use older than 5.24, so no need to pull in dual-life modules
    # if perl 5.24 had a sufficient version.  Set this to match your oldest production perl.
-   my $corelist_perl_version= $options{corelist_perl_version} // '5.024';
-   my $sources= $options{sources} // $self->config->{import_sources};
+   my $perl_v= $options{corelist_perl_version} // $self->corelist_perl_version // '5.024';
+   my $corelist= Module::CoreList::find_version($perl_v);
+   my $sources= $options{sources} // $self->default_import_sources;
+   my $prereq_phases= [qw( configure build runtime test )];
+   my $prereq_types=  [qw( requires )];
+   my $log_recommends= !grep $_ eq 'recommends', @$prereq_types;
    $sources && @$sources
       or croak "No import sources specified";
    # coerce every source name to an ArchiveTree object
    for (@$sources) {
       unless (ref $_ and $_->can('package_details')) {
-         my $t= $self->parent->archive_tree($_)
+         my $t= $self->parent->get_archive_tree($_)
             or croak "No such archive tree $_";
          $_= $t;
       }
    }
-   my @todo= sort keys %$reqs;
+   my $recommended= CPAN::Meta::Requirements->new;
+   # coerce the requirements into a CPAN::Meta::Requirements object
+   $reqs= CPAN::Meta::Requirements->from_string_hash($reqs)
+      if ref $reqs eq 'HASH';
+   # Filter out the prereqs we already have, or which are in the corelist
+   $log->tracef('todo reqs: %s', $reqs->as_string_hash);
+   $log->info('import_modules:');
+   $self->_filter_prereqs($reqs, $corelist);
+   my @todo= $reqs->required_modules;
    while (@todo) {
       my $mod= shift @todo;
-      my $req_version= $self->parse_version_requirement($reqs->{$mod});
-      # Is this requirement already satisfied?
-      # CoreList can only really test '>=' operator.  Ignore the rest of the spec...
-      next if $req_version->[0] eq '>='
-           && Module::CoreList::is_core($mod, $req_version->[1], $corelist_perl_version);
-      my $current= $self->package_details->{by_module}{$mod};
-      next if $current && $self->check_version($req_version, $current->[1]);
+      my $req_version= $reqs->requirements_for_module($mod);
+      $log->tracef('processing %s %s', $mod, $req_version);
       # Walk through the list of import sources looking for a version that works
-      my $prereqs;
+      my ($author_path, $prereqs);
       for my $peer (@$sources) {
-         my $mod_in_peer= $peer->package_details->{by_module}{$mod};
-         my (undef, $peer_ver, $author_path)= @$mod_in_peer;
-         if ($mod_in_peer && $self->check_version($req_version, $peer_ver)) {
+         my $peer_ver= $peer->get_module_version($mod);
+         if (!defined $peer_ver) {
+            $log->debugf('  branch %s does not have module %s', $peer->name, $mod);
+         }
+         elsif (!$reqs->accepts_module($mod, $peer_ver)) {
+            $log->debugf('  branch %s module %s version %s does not match %s', $peer->name, $mod, $peer_ver, $req_version);
+         }
+         else {
+            $log->debugf('  branch %s has %s %s, matching %s', $peer->name, $mod, $peer_ver, $req_version);
+            $author_path= $peer->get_module_dist($mod);
             $self->import_dist($peer, $author_path);
-            $prereqs= $self->get_dist_prereqs($author_path);
+            my $meta= $self->get_dist_meta($author_path);
+            $prereqs= $meta->effective_prereqs if $meta;
             last;
          }
       }
-      croak("No sources had module $mod with version $req_version")
-         unless $prereqs;
+      croak("No import_sources branch had module $mod with version $req_version")
+         unless length $author_path;
       # Push things into the TODO list if they aren't already in %$reqs or if they have a higher
       # version requirement.
-      for (keys %$prereqs) {
-         my $prev= $reqs->{$_} || 0;
-         my $new= $self->combine_version_requirements($prev, $prereqs->{$_});
-         if (!exists $reqs->{$_} or $new ne $prev) {
-            $reqs->{$_}= $new;
-            push @todo, $_;
+      if ($prereqs) {
+         my $dist_reqs= $prereqs->merged_requirements($prereq_phases, $prereq_types);
+         $log->infof('Dist %s:', $author_path);
+         my $n= $#todo;
+         push @todo, $self->_merge_prereqs($reqs, $self->_filter_prereqs($dist_reqs, $corelist));
+         $log->infof('  (no additional reqs)') if $#todo == $n;
+         # Collect recommendations
+         if ($log_recommends) {
+            my $dist_recommends= $prereqs->merged_requirements(['runtime'], ['recommends']);
+            $self->_filter_prereqs($dist_recommends, $corelist);
+            my @list= sort $dist_recommends->required_modules;
+            $log->noticef('Dist %s recommends %s', $mod, [ sort @list ])
+               if @list;
+            $recommended->add_requirements($dist_recommends);
          }
       }
    }
-}
-
-sub parse_version_requirement($self, $spec) {
-   my @requirements;
-   for (split ',', $spec) {
-      /^\s*(?:(<|<=|>|>=|==|!=)\s*)?(v?[0-9]+(\.[0-9_\.]+)?)\s*\z/
-         or croak "Invalid version requirement '$spec'";
-      my $op= $1 // '>=';
-      my $ver= version->parse($2);
-      push @requirements, $op, $ver;
-   }
-   return \@requirements;
-}
-
-# For requirements like ">=1.1" and ">=1.2", simplify that into just ">=1.2"
-sub combine_version_requirements($self, @reqs) {
-   my %per_op;
-   my @ne;
-   for my $req (@reqs) {
-      my $pairs= ref $req eq 'ARRAY'? $req : $self->parse_version_requirement($req);
-      for (my $i= 0; $i < $#$pairs; $i += 2) {
-         my ($op, $num)= @{$pairs}[$i,$i+1];
-         if ($op eq '!=') {
-            push @ne, $num unless grep $_ eq $num, @ne;
-         }
-         elsif (!defined $per_op{$op}) {
-            $per_op{$op}= $num;
-         }
-         elsif ($op eq '==') {
-            # There can be only one
-            croak "Mutually exclusive '==' version tests: ==$num, $per_op{$op}"
-               if $per_op{$op} ne $num;
-         }
-         else {
-            $per_op{$op}= $num
-               unless $self->check_version([ $op, $num ], $per_op{$op});
-         }
+   if ($log_recommends) {
+      if (my @list= sort $recommended->required_modules) {
+         $log->notice('Full list of recommended modules:');
+         $log->noticef('  %s %s', $_, $recommended->requirements_for_module($_));
       }
    }
-   # If '==' requested, verify it matches the rest of the requirements
-   if (defined $per_op{'=='}) {
-      my $single_ver= $per_op{'=='};
-      for (grep $_ ne '==', keys %per_op) {
-         $self->check_version([ $_ => $per_op{$_} ], $single_ver)
-            or croak "Version requirement '$_$per_op{$_}' conflicts with '==$single_ver'";
-      }
-      return ['==', $per_op{'=='}];
-   }
-   # Collapse '>' and '>='
-   my ($min_req, $max_req);
-   if (defined $per_op{'>='} && (!defined $per_op{'>'} || $per_op{'>='} > $per_op{'>'})) {
-      $min_req= [ '>=', $per_op{'>='} ];
-   } elsif (defined $per_op{'>'}) {
-      $max_req= [ '>', $per_op{'>'} ];
-   }
-   # Collapse '<' and '<='
-   if (defined $per_op{'<='} && (!defined $per_op{'<'} || $per_op{'<='} < $per_op{'<'})) {
-      $max_req= [ '<=', $per_op{'<='} ];
-   } elsif (defined $per_op{'<'}) {
-      $max_req= [ '<', $per_op{'<'} ];
-   }
-   # verify '>' and '<' are consistent
-   if ($min_req && $max_req) {
-      $self->check_version($min_req, $max_req->[1])
-      && $self->check_version($max_req, $min_req->[1])
-      or croak "Version requirement '@$min_req' conflicts with '@$max_req'";
-   }
-   return [ @{$min_req||[]}, @{$max_req||[]}, map +('!=', $_), @ne ];
-}
-
-sub check_version($self, $requirement, $version) {
-   $version= version->parse($version)
-      unless ref $version eq 'version';
-   $requirement= ref $requirement eq 'HASH'? [ %$requirement ]
-               : $self->parse_version_requirement($requirement)
-      unless ref $requirement eq 'ARRAY';
-   for (my $i= 0; $i < @$requirement; $i += 2) {
-      my ($op, $rq_ver)= @{$requirement}[$i,$i+1];
-      return !!0 unless $op eq '>='? $version >= $rq_ver
-                      : $op eq '<='? $version <= $rq_ver
-                      : $op eq '=='? $version == $rq_ver
-                      : $op eq '!='? $version != $rq_ver
-                      : $op eq '<'?  $version < $rq_ver
-                      : $op eq '>'?  $version > $rq_ver
-                      : croak("Unhandled comparison op '$op'");
-   }
-   return !!1;
 }
 
 1;

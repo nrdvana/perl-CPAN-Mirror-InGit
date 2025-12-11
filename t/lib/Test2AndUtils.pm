@@ -7,6 +7,12 @@ use experimental qw( signatures );
 use parent 'Test2::V0';
 use File::Temp;
 use IO::Handle;
+use Log::Any::Adapter ();
+eval {
+   require Log::Any::Adapter::TAP;
+   Log::Any::Adapter->set('TAP');
+   1;
+} or Log::Any::Adapter->set('Stderr');
 
 our @EXPORT= (
    @Test2::V0::EXPORT,
