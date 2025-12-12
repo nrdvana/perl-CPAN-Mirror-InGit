@@ -43,6 +43,11 @@ has upstream_url            => ( is => 'rw', coerce => \&_add_trailing_slash );
 has autofetch               => ( is => 'rw' );
 has package_details_max_age => ( is => 'rw', default => 86400 );
 
+sub _add_trailing_slash {
+   my $x= shift;
+   $x =~ s{/?\z}{/}r
+}
+
 sub _pack_config($self, $config) {
    $config->{upstream_url}= $self->upstream_url;
    $config->{autofetch}= $self->autofetch;
@@ -61,25 +66,31 @@ sub get_path($self, $path) {
    if ($self->autofetch) {
       # Special case for 02packages.details.txt, load it if missing or if cache is stale
       if ($path eq 'modules/02packages.details.txt') {
-         my $blob_last_update;
          if ($ent) {
-            $blob_last_update= $self->{_blob_last_update}{$ent->[0]->id} // do {
+            my $blob_last_update= $self->{_blob_last_update}{$ent->[0]->id} // do {
                # parse it out of the file
-               my $head= substr($ent->content, 0, 10000);
+               my $head= substr($ent->[0]->content, 0, 10000);
                $head =~ /^Last-Updated:\s*(.*)$/m or die "Can't parse 02packages.details.txt";
                (my $date= $1) =~ s/\s+\z//;
                $log->debug("Date in modules/02packages.details.txt is '$date'");
                Time::Piece->strptime($date, "%a, %d %b %Y %H:%M:%S GMT")->epoch
             };
+            if ($blob_last_update >= time - $self->package_details_max_age) {
+               $log->trace(' 02package.details.txt cache is current');
+            } else {
+               $log->trace(' 02package.details.txt cache expired');
+               $ent= undef;
+            }
          }
-         my $cutoff= time - $self->package_details_max_age;
-         unless ($blob_last_update && $blob_last_update >= $cutoff) {
+         unless ($ent) {
+            $log->debug(" mirror autofetch $path");
             my $blob= $self->add_upstream_package_details;
             $self->clear_package_details; # will lazily rebuild
             $ent= [ $blob, 0100644 ];
          }
       }
       elsif ($path =~ m{^authors/id/(.*)} and !$ent) {
+         $log->debug(" mirror autofetch $path");
          my $author_path= $1;
          my $blob= $self->add_upstream_author_file($author_path, undef_if_404 => 1);
          $ent= [ $blob, 0100644 ] if $blob;
@@ -102,9 +113,10 @@ sub fetch_upstream_file($self, $path, %options) {
       unless defined $self->upstream_url;
    my $url= $self->upstream_url . $path;
    my $tx= $self->parent->useragent->get($url);
+   $log->debugf(" GET %s -> %s %s", $url, $tx->result->code, $tx->result->message);
    unless ($tx->result->is_success) {
       return undef if $options{undef_if_404} && $tx->result->code == 404;
-      croak "Failed to find file upstream: ".$tx->result->extract_start_line;
+      croak "Failed to find file upstream: ".$tx->result->message;
    }
    return \$tx->result->body;
 }

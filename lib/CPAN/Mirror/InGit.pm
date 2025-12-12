@@ -136,14 +136,19 @@ sub get_archive_tree($self, $branch_or_tag_or_id) {
    my $use_workdir= !$self->git_repo->is_bare && (($branch && $branch->is_head) || $branch_or_tag_or_id eq 'HEAD');
 
    # Does it look like an ArchiveTree?
+   my $config_blob;
    if ($use_workdir) {
       my $ent= $self->git_repo->index->find('cpan_ingit.json');
       return undef unless $ent;
+      $config_blob= $ent->blob;
    } else {
       my $ent= $tree->entry_bypath('cpan_ingit.json');
       return undef unless $ent;
+      $config_blob= $ent->object;
    }
-   return CPAN::Mirror::InGit::ArchiveTree->new(
+   my $cfg= JSON::PP->new->relaxed->decode($config_blob->content);
+   my $class= $cfg->{upstream_url}? 'CPAN::Mirror::InGit::MirrorTree' : 'CPAN::Mirror::InGit::ArchiveTree';
+   return $class->new(
       parent => $self,
       tree => $tree,
       use_workdir => $use_workdir,

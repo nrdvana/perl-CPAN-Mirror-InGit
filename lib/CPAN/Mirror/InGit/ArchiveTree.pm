@@ -82,15 +82,15 @@ sub load_config($self) {
 }
 
 sub _unpack_config($self, $config) {
-   $self->default_import_sources($config->{default_import_sources});
-   $self->corelist_perl_version($config->{corelist_perl_version});
-   $self->canonical_url($config->{canonical_url});
+   for (qw( default_import_sources corelist_perl_version canonical_url )) {
+      $self->$_($config->{$_}) if defined $config->{$_};
+   }
 }
 
 sub _pack_config($self, $config) {
-   $config->{canonical_url}= $self->canonical_url;
-   $config->{default_import_sources}= $self->default_import_sources;
-   $config->{corelist_perl_version}=  $self->corelist_perl_version;
+   for (qw( default_import_sources corelist_perl_version canonical_url )) {
+      $config->{$_}= $self->$_;
+   }
 }
 
 sub write_config($self) {
@@ -119,7 +119,7 @@ core distribution or whether it should be fetched from CPAN.
 
 has canonical_url          => ( is => 'rw' );
 has default_import_sources => ( is => 'rw' );
-has corelist_perl_version  => ( is => 'rw' );
+has corelist_perl_version  => ( is => 'rw', default => '5.008000' );
 
 =attribute package_details
 
@@ -242,15 +242,19 @@ sub has_module($self, $mod_name, $reqs=undef) {
 }
 
 sub get_module_version($self, $mod_name) {
-   my $current= $self->package_details->{by_module}{$mod_name}
-      or return undef;
-   my $mod_ver= $current->[1];
-   # grab the version out of the package filename?
-   if (!defined $mod_ver) {
-      $mod_ver= $current->[2] =~ /-([0-9]+(?:\.[0-9_]+?)*)\./? $1
-              : 0; # return 0 to differentiate from undef=nonexisting
+   if (my $current= $self->package_details->{by_module}{$mod_name}) {
+      my $mod_ver= $current->[1];
+      # grab the version out of the package filename?
+      if (!defined $mod_ver) {
+         $mod_ver= $current->[2] =~ /-([0-9]+(?:\.[0-9_]+?)*)\./? $1
+                 : 0; # return 0 to differentiate from undef=nonexisting
+      }
+      return $mod_ver;
+   } elsif ($mod_name eq 'perl') {
+      return $self->corelist_perl_version;
+   } else {
+      return undef;
    }
-   return $mod_ver;
 }
 
 sub get_module_dist($self, $mod_name) {
@@ -353,7 +357,8 @@ sub _filter_prereqs($self, $reqs, $corelist={}) {
       # Is this requirement already in the tree?
       if (defined $have_ver && $reqs->accepts_module($mod, $have_ver)) {
          $log->debugf('  requirement %s %s satisfied by existing version %s from %s',
-            $mod, $req_version, $have_ver, $self->get_module_dist($mod))
+            $mod, $req_version, $have_ver,
+            ($mod eq 'perl'? 'corelist_perl_version' : $self->get_module_dist($mod)))
             if $log->is_debug;
          $reqs->clear_requirement($mod);
       }
@@ -393,10 +398,14 @@ sub import_modules($self, $reqs, %options) {
    $sources && @$sources
       or croak "No import sources specified";
    # coerce every source name to an ArchiveTree object
+   my @autocommit;
    for (@$sources) {
       unless (ref $_ and $_->can('package_details')) {
          my $t= $self->parent->get_archive_tree($_)
             or croak "No such archive tree $_";
+         # If we've created new objects for MirrorTree and the MirrorTree has autofetch
+         # enabled, then we also need to commit those changes before returning.
+         push @autocommit, $t if $t->can('autofetch') && $t->autofetch;
          $_= $t;
       }
    }
@@ -408,7 +417,8 @@ sub import_modules($self, $reqs, %options) {
    $log->tracef('todo reqs: %s', $reqs->as_string_hash);
    $log->info('import_modules:');
    $self->_filter_prereqs($reqs, $corelist);
-   my @todo= $reqs->required_modules;
+   my @initial_list= $reqs->required_modules;
+   my @todo= @initial_list;
    while (@todo) {
       my $mod= shift @todo;
       my $req_version= $reqs->requirements_for_module($mod);
@@ -456,8 +466,20 @@ sub import_modules($self, $reqs, %options) {
    if ($log_recommends) {
       if (my @list= sort $recommended->required_modules) {
          $log->notice('Full list of recommended modules:');
-         $log->noticef('  %s %s', $_, $recommended->requirements_for_module($_));
+         $log->noticef('  %s %s', $_, $recommended->requirements_for_module($_))
+            for @list;
       }
+   }
+   # If any sources are 'autofetch' and caller didn't supply the MirrorTree object,
+   # commit the changes before returning.
+   for my $mirror (grep $_->has_changes, @autocommit) {
+      my $message= join "\n",
+         'Auto-commit packages fetched for branch '.$self->name,
+         '',
+         'For $archive_tree->import_modules:',
+         map("  - $_ ".$reqs->requirements_for_module($_), @initial_list),
+         '';
+      $mirror->commit($message);
    }
 }
 

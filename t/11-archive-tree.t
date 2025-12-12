@@ -83,7 +83,7 @@ subtest package_details => sub {
    my $cpan_repo= CPAN::Mirror::InGit->new(repo => $git_repo);
    my $mtree= CPAN::Mirror::InGit::MutableTree->new(parent => $cpan_repo);
    $mtree->set_path('modules/02packages.details.txt', \$package_details_txt);
-   $mtree->set_path('cpan_ingit.json', \q{{"corelist_perl_version":"5.16","default_import_sources":[]}});
+   $mtree->set_path('cpan_ingit.json', \q{{"corelist_perl_version":"5.016","default_import_sources":[]}});
    $mtree->commit("Add Package List", create_branch => 'test');
    
    my $atree= CPAN::Mirror::InGit::ArchiveTree->new(
