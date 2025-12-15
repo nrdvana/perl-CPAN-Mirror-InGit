@@ -1,4 +1,4 @@
-package CPAN::Mirror::InGit::Server;
+package CPAN::InGit::Server;
 # VERSION
 # ABSTRACT: A Mojolicious::Controller that serves the ArchiveTrees from a git repo
 
@@ -17,17 +17,17 @@ use Time::Piece;
 use Log::Any '$log';
 use Archive::Tar;
 use IO::Compress::Gzip qw( gzip $GzipError );
-use CPAN::Mirror::InGit;
+use CPAN::InGit;
 use Mojo::Base 'Mojolicious::Controller';
 use v5.36;
 
 =attribute cpan_repo
 
-Reference to the CPAN::Mirror::InGit object from which files will be served
+Reference to the CPAN::InGit object from which files will be served
 
 =attribute archive_tree
 
-Reference to an L<ArchvieTree|CPAN::Mirror::InGit::ArchvieTree> object.  If set, the controller
+Reference to an L<ArchvieTree|CPAN::InGit::ArchvieTree> object.  If set, the controller
 will serve only the tree of this branch from whatever path it was rooted at.  If not set,
 this attribute will be lazy-built from attribute C<branch_name> and cached in C<branch_cache>.
 The lazy-building of this attribute may return C<undef>, and should be checked I<before>
@@ -97,7 +97,7 @@ A functioning CPAN mirror requires a file C<< /modules/02packages.details.txt.gz
 the full contents of the latest version of every module.  That file also lists the author paths
 for each module, which are relative to C<< /authors/id/ >>
 
-In CPAN::Mirror::InGit, C<< /modules/02packages.details.txt >> is stored uncompressed, and
+In CPAN::InGit, C<< /modules/02packages.details.txt >> is stored uncompressed, and
 gzipped as it is served.  Each author dist is stored as a .tar.gz file and a metadata file with
 extension .meta and may also optionally be unpacked at a directory of the same name minus the
 .tar.gz extension.  A special author "local" is used for custom overrides of upstream packages.
@@ -113,8 +113,8 @@ Summary:
 =head2 mount
 
   my $route= app->routes->any('/pan');
-  my $repo= CPAN::Mirror::InGit->new(git_repo => '/path/to/.git');
-  CPAN::Mirror::InGit::Server->mount($route, $repo, %options);
+  my $repo= CPAN::InGit->new(git_repo => '/path/to/.git');
+  CPAN::InGit::Server->mount($route, $repo, %options);
   # %options:
   #   archive_tree => $ArchiveTree_obj,
   #   branch_cache => $branch_cache,

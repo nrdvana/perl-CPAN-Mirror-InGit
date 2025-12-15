@@ -3,7 +3,7 @@ use v5.36;
 use FindBin;
 BEGIN { push @INC, "$FindBin::RealBin/../lib" if -f "$FindBin::RealBin/../dist.ini" }
 use Cwd;
-use CPAN::Mirror::InGit;
+use CPAN::InGit;
 use Git::Raw::Branch;
 use Getopt::Long;
 use Pod::Usage;
@@ -26,7 +26,7 @@ You can later edit the C<cpan_ingit.json> file to reconfigure a branch.
 
 =item --repo=PATH
 
-Path to the Git repository of L<CPAN::Mirror::InGit>.  Uses the C<.git> dir at or above the
+Path to the Git repository of L<CPAN::InGit>.  Uses the C<.git> dir at or above the
 current directory by default.
 
 =item --upstream=URL
@@ -66,7 +66,7 @@ unless (-d $repo_path && -d "$repo_path/objects" && -f "$repo_path/config") {
 }
 
 { # scope to help run destructors in the right order
-   my $cpan_repo= CPAN::Mirror::InGit->new(repo => $repo_path);
+   my $cpan_repo= CPAN::InGit->new(repo => $repo_path);
    $cpan_repo->create_mirror($branch_name,
       upstream_url => $upstream_url,
       source_branches => \@source_branches,

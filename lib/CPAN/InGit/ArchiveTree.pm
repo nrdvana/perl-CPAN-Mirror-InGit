@@ -1,4 +1,4 @@
-package CPAN::Mirror::InGit::ArchiveTree;
+package CPAN::InGit::ArchiveTree;
 # VERSION
 # ABSTRACT: An object managing a CPAN file structure in a Git Tree
 
@@ -8,7 +8,7 @@ This object represents a tree of files matching the layout of CPAN.  It may be a
 of an upstream CPAN/DarkPAN, or it may be a local curated collection of modules intended to
 provide pinned versions for an application.  Mirrors (meaning *every* package from upstream is
 listed in the index and fetched on demand) are represented by the subclass
-L<MirrorTree|CPAN::Mirror::InGit::MirrorTree> which implements the fetching of files from
+L<MirrorTree|CPAN::InGit::MirrorTree> which implements the fetching of files from
 upstream.  This class only contains methods to import distributions from other Git branches.
 
 Distributions in C<authors/id/X/XX/XXXXX> should be kept identical to the public CPAN copy.
@@ -30,7 +30,7 @@ use Log::Any '$log';
 use Moo;
 use v5.36;
 
-extends 'CPAN::Mirror::InGit::MutableTree';
+extends 'CPAN::InGit::MutableTree';
 
 =attribute config
 
@@ -52,7 +52,7 @@ Load the configuration of this ArchiveTree from the config file within the git t
   $archive_tree->write_config($config);
 
 Create a new /cpan_ingit.json from the L</config> attribute of this ArchiveTree.  By default
-This stages the change (see L<CPAN::Mirror::InGit::MutableTree>) but does not commit it.
+This stages the change (see L<CPAN::InGit::MutableTree>) but does not commit it.
 
 =cut
 

@@ -3,9 +3,9 @@ use Test2::V0;
 use v5.36;
 
 my @pkgs= qw(
-   CPAN::Mirror::InGit
-   CPAN::Mirror::InGit::MirrorTree
-   CPAN::Mirror::InGit::ArchiveTree
+   CPAN::InGit
+   CPAN::InGit::MirrorTree
+   CPAN::InGit::ArchiveTree
 );
 
 ok( eval "require $_", $_ )

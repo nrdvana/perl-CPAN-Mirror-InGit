@@ -3,8 +3,8 @@ use lib "$FindBin::Bin/lib";
 use Test2AndUtils;
 use File::Temp;
 use Git::Raw;
-use CPAN::Mirror::InGit;
-use CPAN::Mirror::InGit::ArchiveTree;
+use CPAN::InGit;
+use CPAN::InGit::ArchiveTree;
 use v5.36;
 
 #subtest version_checks => sub {
@@ -18,7 +18,7 @@ use v5.36;
 #      [ '>2,!=2.002,!=2.004' => [ '>', '2', '!=', '2.002', '!=', '2.004' ] ],
 #   ) {
 #      my ($str, $spec)= @$_;
-#      is( CPAN::Mirror::InGit::ArchiveTree->parse_version_requirement($str), $spec, "parse $str" );
+#      is( CPAN::InGit::ArchiveTree->parse_version_requirement($str), $spec, "parse $str" );
 #   }
 #   
 #   for (
@@ -27,7 +27,7 @@ use v5.36;
 #      [ '==5.01_01,5,>4'   => [ '==', '5.01_01' ] ],
 #   ) {
 #      my ($str, $spec)= @$_;
-#      is( CPAN::Mirror::InGit::ArchiveTree->combine_version_requirements($str), $spec, "combine $str" );
+#      is( CPAN::InGit::ArchiveTree->combine_version_requirements($str), $spec, "combine $str" );
 #   }
 #};
 
@@ -80,13 +80,13 @@ subtest package_details => sub {
    my $git_repo= Git::Raw::Repository->init($repodir, 1); # new bare repo in tmpdir
    note "repo at $repodir";
 
-   my $cpan_repo= CPAN::Mirror::InGit->new(repo => $git_repo);
-   my $mtree= CPAN::Mirror::InGit::MutableTree->new(parent => $cpan_repo);
+   my $cpan_repo= CPAN::InGit->new(repo => $git_repo);
+   my $mtree= CPAN::InGit::MutableTree->new(parent => $cpan_repo);
    $mtree->set_path('modules/02packages.details.txt', \$package_details_txt);
    $mtree->set_path('cpan_ingit.json', \q{{"corelist_perl_version":"5.016","default_import_sources":[]}});
    $mtree->commit("Add Package List", create_branch => 'test');
    
-   my $atree= CPAN::Mirror::InGit::ArchiveTree->new(
+   my $atree= CPAN::InGit::ArchiveTree->new(
       parent => $cpan_repo,
       branch => Git::Raw::Branch->lookup($git_repo, 'test', 1),
    );
@@ -153,8 +153,8 @@ subtest import_modules => sub {
    my $git_repo= Git::Raw::Repository->init($repodir, 1); # new bare repo in tmpdir
    note "repo at $repodir";
 
-   my $cpan_repo= CPAN::Mirror::InGit->new(repo => $git_repo);
-   my $mtree= CPAN::Mirror::InGit::MutableTree->new(parent => $cpan_repo);
+   my $cpan_repo= CPAN::InGit->new(repo => $git_repo);
+   my $mtree= CPAN::InGit::MutableTree->new(parent => $cpan_repo);
    $mtree->set_path('modules/02packages.details.txt', \$package_details_txt);
    $mtree->set_path('cpan_ingit.json', \'{}');
    $mtree->set_path('authors/id/M/MS/MSCHWERN/AAAAAAAAA-1.01.tar.gz', \'Pretend this is a TAR archive');

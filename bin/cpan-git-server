@@ -5,7 +5,7 @@ use Git::Raw::Object;
 use Archive::Tar;
 use IO::Compress::Gzip qw( gzip $GzipError );
 BEGIN { push @INC, "$FindBin::RealBin/../lib" if -f "$FindBin::RealBin/../dist.ini" }
-use CPAN::Mirror::InGit;
+use CPAN::InGit;
 use v5.36;
 
 my $repo= $ENV{GIT_DIR};
@@ -21,7 +21,7 @@ if (!$repo) {
 defined $repo or die "Require --git-dir=X option or GIT_DIR=X environment variable\n";
 -d $repo or die "No such directory: '$repo'\n";
 
-my $mig= CPAN::Mirror::InGit->new(repo => $repo);
+my $mig= CPAN::InGit->new(repo => $repo);
 
 =head1 ROUTES
 

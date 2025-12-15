@@ -1,9 +1,9 @@
-package CPAN::Mirror::InGit::MutableTree;
+package CPAN::InGit::MutableTree;
 # ABSTRACT: Utility object that represents a Git Tree and pending changes
 
 =head1 SYNOPSIS
 
-  my $t= CPAN::Mirror::InGit::MutableTree->new(
+  my $t= CPAN::InGit::MutableTree->new(
     parent   => $cpan_repo,
     tree     => $git_tree_obj,
     branch   => $name,

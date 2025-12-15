@@ -3,7 +3,7 @@ use lib "$FindBin::Bin/lib";
 use Test2AndUtils;
 use File::Temp;
 use Git::Raw;
-use CPAN::Mirror::InGit;
+use CPAN::InGit;
 use v5.36;
 
 skip_all 'Avoiding queries to public CPAN unless you set TEST_CPAN_INGIT_FETCH_MODULE'
@@ -19,7 +19,7 @@ my $git_repo= Git::Raw::Repository->init($repodir, 1); # new bare repo in tmpdir
 note "repo at $repodir";
 
 subtest autofetch => sub {
-   my $cpan_repo= CPAN::Mirror::InGit->new(repo => $git_repo);
+   my $cpan_repo= CPAN::InGit->new(repo => $git_repo);
    my $mirror= $cpan_repo->create_archive_tree('www_cpan_org',
       upstream_url => 'https://www.cpan.org',
       autofetch => 1,
@@ -33,7 +33,7 @@ subtest autofetch => sub {
 };
 
 subtest fetch_dependencies => sub {
-   my $cpan_repo= CPAN::Mirror::InGit->new(repo => $git_repo);
+   my $cpan_repo= CPAN::InGit->new(repo => $git_repo);
    ok( my $mirror= $cpan_repo->get_archive_tree('www_cpan_org'), 'found mirror' );
    my $app_pan= $cpan_repo->create_archive_tree('my_app_'.rand,
       default_import_sources => [ 'www_cpan_org' ],

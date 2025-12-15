@@ -1,10 +1,10 @@
-package CPAN::Mirror::InGit::MirrorTree;
+package CPAN::InGit::MirrorTree;
 # VERSION
 # ABSTRACT: Subclass of ArchiveTree which automatically mirrors files from upstream
 
 =head1 DESCRIPTION
 
-This is a subclass of L<CPAN::Mirror::InGit::ArchiveTree> which behaves as a pure mirror of an
+This is a subclass of L<CPAN::InGit::ArchiveTree> which behaves as a pure mirror of an
 upstream CPAN or DarkPAN.  The attribute L</autofetch> allows it to import files from the public
 CPAN on demand.
 
@@ -20,7 +20,7 @@ use Log::Any '$log';
 use Moo;
 use v5.36;
 
-extends 'CPAN::Mirror::InGit::ArchiveTree';
+extends 'CPAN::InGit::ArchiveTree';
 
 =attribute upstream_url
 

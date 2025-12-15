@@ -3,7 +3,7 @@ use lib "$FindBin::Bin/lib";
 use Test2AndUtils;
 use File::Temp;
 use Git::Raw;
-use CPAN::Mirror::InGit;
+use CPAN::InGit;
 use v5.36;
 
 { # Scope for orderly cleanup of variables
@@ -12,7 +12,7 @@ use v5.36;
    my $git_repo= Git::Raw::Repository->init($repodir, 1); # new bare repo in tmpdir
    note "repo at $repodir";
 
-   my $cpan_repo= CPAN::Mirror::InGit->new(repo => $git_repo);
+   my $cpan_repo= CPAN::InGit->new(repo => $git_repo);
    
    my $mirror= $cpan_repo->create_mirror('www_cpan_org', upstream_url => 'https://www.cpan.org');
    is $mirror,

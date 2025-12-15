@@ -3,8 +3,8 @@ use lib "$FindBin::Bin/lib";
 use Test2AndUtils;
 use File::Temp;
 use Git::Raw;
-use CPAN::Mirror::InGit;
-use CPAN::Mirror::InGit::MutableTree;
+use CPAN::InGit;
+use CPAN::InGit::MutableTree;
 use v5.36;
 
 my $have_git= `git --version`;
@@ -15,8 +15,8 @@ subtest in_bare_repo => sub {
    my $git_repo= Git::Raw::Repository->init($repodir, 1); # new bare repo in tmpdir
    note "repo at $repodir";
 
-   my $cpan_repo= CPAN::Mirror::InGit->new(repo => $git_repo);
-   my $mtree= CPAN::Mirror::InGit::MutableTree->new(parent => $cpan_repo);
+   my $cpan_repo= CPAN::InGit->new(repo => $git_repo);
+   my $mtree= CPAN::InGit::MutableTree->new(parent => $cpan_repo);
    
    # get_path on an empty tree returns undef (doesn't die)
    is( $mtree->get_path("example/test.txt"), undef, 'nonexistent test.txt' );
@@ -47,8 +47,8 @@ subtest in_workdir => sub {
    my $git_repo= Git::Raw::Repository->init($repodir, 0); # new repo with workdir
    note "repo at $repodir";
 
-   my $cpan_repo= CPAN::Mirror::InGit->new(repo => $git_repo);
-   my $mtree= CPAN::Mirror::InGit::MutableTree->new(parent => $cpan_repo, use_workdir => 1);
+   my $cpan_repo= CPAN::InGit->new(repo => $git_repo);
+   my $mtree= CPAN::InGit::MutableTree->new(parent => $cpan_repo, use_workdir => 1);
    
    # get_path on an empty tree returns undef (doesn't die)
    is( $mtree->get_path("example/test.txt"), undef, 'nonexistent test.txt' );
