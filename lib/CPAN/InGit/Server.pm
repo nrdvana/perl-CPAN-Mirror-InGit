@@ -143,6 +143,13 @@ sub mount($class, $base_route, $cpan_repo, %options) {
    $tree_route->get('/authors/id/*author_path')->to(action => 'serve_author_file');
 }
 
+=method check_branch_exists
+
+This checks that the L</branch_name> could be successfully resolved to a L</archive_tree>.
+It returns true, or sets a 404 error and returns undef, and can be used as C<< ->under(\&check_branch_exists) >>.
+
+=cut
+
 sub check_branch_exists($c) {
    unless ($c->archive_tree) {
       $c->render(text => 'Git branch does not exist', status => 404);
@@ -151,10 +158,24 @@ sub check_branch_exists($c) {
    return 1;
 }
 
+=method serve_package_details
+
+Serve C<< modules/02packages.details.txt.gz >>.
+
+=cut
+
 sub serve_package_details($c) {
    return undef unless $c->check_branch_exists;
    $c->render_gzipped($c->archive_tree->package_details_blob->content, '02packages.details.txt.gz');
 }
+
+=method serve_author_file
+
+Serve all files under C<< authors/id/... >>.  (All files in that path of the git branch are considered public)
+This performs automatic creation of .tar.gz files if a directory and matching .meta file exist,
+allowing distributions to be unpacked within the git repo, but served as .tar.gz files.
+
+=cut
 
 sub serve_author_file($c) {
    return undef unless $c->check_branch_exists;
@@ -193,6 +214,12 @@ sub serve_author_file($c) {
       $c->render(status => 404, text => 'No such path in branch');
    }
 }
+
+=method render_gzipped
+
+Serve content after gzipping it and setting the content type to C<< application/gzip >>.
+
+=cut
 
 sub render_gzipped($c, $data, $filename='') {
    my $gzipped;

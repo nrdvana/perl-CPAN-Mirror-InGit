@@ -32,27 +32,18 @@ use v5.36;
 
 extends 'CPAN::InGit::MutableTree';
 
+=attribute name
+
+A human-readable name for this ArchiveTree instance.  Defaults to the branch name, when loaded
+from a branch.
+
 =attribute config
 
 A hashref of configuration stored in the tree, and lazily-loaded.
 
-=method config_blob
+=attribute config_blob
 
 Returns the Blob of the C<cpan_ingit.conf> file, or C<undef> if it doesn't exist.
-
-=method load_config
-
-  %attrs= $archive_tree->load_config();
-
-Load the configuration of this ArchiveTree from the config file within the git tree.
-(path C<< /cpan_ingit.json >>)
-
-=method write_config
-
-  $archive_tree->write_config($config);
-
-Create a new /cpan_ingit.json from the L</config> attribute of this ArchiveTree.  By default
-This stages the change (see L<CPAN::InGit::MutableTree>) but does not commit it.
 
 =cut
 
@@ -70,6 +61,22 @@ sub config_blob($self) {
       or return undef;
    return $ent->[0]->is_blob? $ent->[0] : undef;
 }
+
+=method load_config
+
+  %attrs= $archive_tree->load_config();
+
+Load the configuration of this ArchiveTree from the config file within the git tree.
+(path C<< /cpan_ingit.json >>)
+
+=method write_config
+
+  $archive_tree->write_config($config);
+
+Create a new /cpan_ingit.json from the L</config> attribute of this ArchiveTree.  By default
+This stages the change (see L<CPAN::InGit::MutableTree>) but does not commit it.
+
+=cut
 
 sub load_config($self) {
    my $cfg_blob= $self->config_blob
@@ -261,6 +268,15 @@ sub get_module_dist($self, $mod_name) {
    my $by_name= $self->package_details->{by_module}{$mod_name};
    return $by_name? $by_name->[2] : undef;
 }
+
+=method meta_path_for_dist
+
+  $author_path= $atree->meta_path_for_dist($author_path);
+
+Return the author path for the .meta file corresponding with the distribution at an author path.
+This is just a simple replacement of file extension that accounts for some special cases.
+
+=cut
 
 sub meta_path_for_dist($self, $author_path) {
    # replace archive extension with '.meta.json'

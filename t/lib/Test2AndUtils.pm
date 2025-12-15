@@ -3,6 +3,8 @@ use v5.26;
 use warnings;
 use Test2::V0 '!subtest';
 use Test2::Tools::Subtest 'subtest_streamed';
+use Test2::Tools::Compare 0.000156;
+use Test2::Tools::Compare 'number_gt';
 use experimental qw( signatures );
 use parent 'Test2::V0';
 use File::Temp;
@@ -13,7 +15,7 @@ or note "Failed to setup Log::Any::Adapter: $@";
 
 our @EXPORT= (
    @Test2::V0::EXPORT,
-   qw( explain unindent mkfile slurp escape_nonprintable hexdump )
+   qw( number_gt explain unindent mkfile slurp escape_nonprintable hexdump )
 );
 
 # Test2 runs async by default, which messes up the relation between warnings and the test

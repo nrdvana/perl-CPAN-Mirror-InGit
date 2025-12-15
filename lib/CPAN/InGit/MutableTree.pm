@@ -31,9 +31,39 @@ use Moo;
 use Git::Raw::Index;
 use v5.36;
 
+=attribute parent
+
+An instance of L<CPAN::InGit>
+
+=attribute tree
+
+An instance of L<Git::Raw::Tree> which is the starting state for this MutableTree instance.
+This attribute gets updated to point to the new tree by calls to L</update_tree> or L</commit>.
+
+=attribute branch
+
+An instance of L<Git::Raw::Branch>, which may be coerced from a branch name to the constructor.
+This may be C<undef> if the tree is not the head of any branch.
+
+=attribute has_changes
+
+True if any L</set_path> calls caused a change that needs written back to the tree, and hasn't
+been written yet.
+
+=attribute use_workdir
+
+True if changes written to this MutableTree should use the Git index (working directory) instead
+of directly updating the branch in Git's storage.
+
+=attribute git_repo
+
+Convenient accessor for C<< ->parent->git_repo >>.
+
+=cut
+
 has parent            => ( is => 'ro', required => 1 );
-has branch            => ( is => 'rw' );
 has tree              => ( is => 'rw' );
+has branch            => ( is => 'rw' );
 has _changes          => ( is => 'rw' );
 has has_changes       => ( is => 'rw' );
 has use_workdir       => ( is => 'rw' );
