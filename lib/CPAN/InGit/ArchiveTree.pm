@@ -350,20 +350,22 @@ working branch, the index also gets updated.
 
 =cut
 
-sub _filter_prereqs($self, $reqs, $corelist={}) {
+sub _filter_prereqs($self, $reqs, $corelist={}, $log_prefix='') {
    for my $mod (sort $reqs->required_modules) {
       my $req_version= $reqs->requirements_for_module($mod);
       my $have_ver= $self->get_module_version($mod);
       # Is this requirement already in the tree?
       if (defined $have_ver && $reqs->accepts_module($mod, $have_ver)) {
-         $log->debugf('  requirement %s %s satisfied by existing version %s from %s',
+         $log->debugf($log_prefix.'(requirement %s %s already satisfied by %s from %s)',
             $mod, $req_version, $have_ver,
             ($mod eq 'perl'? 'corelist_perl_version' : $self->get_module_dist($mod)))
-            if $log->is_debug;
+            if $log->is_info;
          $reqs->clear_requirement($mod);
       }
+      # Is the requirement satisfied by a core perl module in the version of perl
+      # the app will be running under?
       elsif (defined $corelist->{$mod} && $reqs->accepts_module($mod, $corelist->{$mod})) {
-         $log->debugf('  requirement %s %s satisfied by corelist', $mod, $req_version);
+         $log->debugf($log_prefix.'(requirement %s %s satisfied by corelist)', $mod, $req_version);
          $reqs->clear_requirement($mod);
       }
    }
@@ -379,7 +381,7 @@ sub _merge_prereqs($self, $reqs, $new_reqs) {
    for my $mod (sort $new_reqs->required_modules) {
       if (($before->{$mod} // '') ne ($after->{$mod} // 0)) {
          push @changed, $mod;
-         $log->infof('  added requirement %s%s', $mod, $after->{$mod}? " ver. $after->{$mod}" : '');
+         $log->infof('  requires %s%s', $mod, $after->{$mod}? " $after->{$mod}" : '');
       }
    }
    return @changed;
@@ -415,14 +417,13 @@ sub import_modules($self, $reqs, %options) {
       if ref $reqs eq 'HASH';
    # Filter out the prereqs we already have, or which are in the corelist
    $log->tracef('todo reqs: %s', $reqs->as_string_hash);
-   $log->info('import_modules:');
    $self->_filter_prereqs($reqs, $corelist);
    my @initial_list= $reqs->required_modules;
    my @todo= @initial_list;
    while (@todo) {
       my $mod= shift @todo;
       my $req_version= $reqs->requirements_for_module($mod);
-      $log->tracef('processing %s %s', $mod, $req_version);
+      $log->infof('Add %s %s', $mod, $req_version);
       # Walk through the list of import sources looking for a version that works
       my ($author_path, $prereqs);
       for my $peer (@$sources) {
@@ -450,7 +451,7 @@ sub import_modules($self, $reqs, %options) {
          my $dist_reqs= $prereqs->merged_requirements($prereq_phases, $prereq_types);
          $log->infof('Dist %s:', $author_path);
          my $n= $#todo;
-         push @todo, $self->_merge_prereqs($reqs, $self->_filter_prereqs($dist_reqs, $corelist));
+         push @todo, $self->_merge_prereqs($reqs, $self->_filter_prereqs($dist_reqs, $corelist, '  '));
          $log->infof('  (no additional reqs)') if $#todo == $n;
          # Collect recommendations
          if ($log_recommends) {

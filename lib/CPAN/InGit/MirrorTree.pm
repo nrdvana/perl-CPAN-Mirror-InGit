@@ -40,7 +40,7 @@ Defaults to one day (86400).  This only has an effect when C<autofetch> is enabl
 =cut
 
 has upstream_url            => ( is => 'rw', coerce => \&_add_trailing_slash );
-has autofetch               => ( is => 'rw' );
+has autofetch               => ( is => 'rw', default => 1 );
 has package_details_max_age => ( is => 'rw', default => 86400 );
 
 sub _add_trailing_slash {

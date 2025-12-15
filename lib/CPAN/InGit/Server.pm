@@ -84,7 +84,7 @@ sub branch_head_only($c) { $c->stash('branch_head_only') }
 sub _new_cache {
    state $have_tree_rb_xs= eval { require Tree::RB::XS; };
    my %hash;
-   tie %hash, 'Tree::RB::XS', lru_limit => 100
+   tie %hash, 'Tree::RB::XS'#, lru_limit => 100
       if $have_tree_rb_xs;
    \%hash;
 }
@@ -128,33 +128,36 @@ selector portion of the paths.
 =cut
 
 sub mount($class, $base_route, $cpan_repo, %options) {
-   my %attrs= ( cpan_repo => $cpan_repo, %options );
    my $atree= $options{archive_tree};
    if ($atree) {
       croak "Not an ArchiveTree"
          unless blessed($atree) && $atree->can('get_path');
    } else {
       # Ensure there is a cache if serving all branches
-      $attrs{branch_cache} //= $class->_new_cache;
+      $options{branch_cache} //= $class->_new_cache;
    }
-   $base_route= $base_route->to(%attrs);
+   $base_route= $base_route->to(namespace => '', controller => $class, cpan_repo => $cpan_repo, %options);
    my $tree_route= $atree? $base_route
-      : $base_route->any('/:branch_name')->under(sub($c) {
-         unless ($c->archive_tree) {
-            $c->render(text => 'Git branch does not exist', status => 404);
-            return undef;
-         }
-         return 1;
-      });
-   $tree_route->get('/modules/02packages.details.txt.gz')->to("$class#serve_packages_details");
-   $tree_route->get('/authors/id/*author_path')->to("$class#serve_author_file");
+      : $base_route->any('/:branch_name');
+   $tree_route->get('/modules/02packages.details.txt.gz')->to(action => 'serve_package_details');
+   $tree_route->get('/authors/id/*author_path')->to(action => 'serve_author_file');
 }
 
-sub serve_packages_details($c) {
+sub check_branch_exists($c) {
+   unless ($c->archive_tree) {
+      $c->render(text => 'Git branch does not exist', status => 404);
+      return undef;
+   }
+   return 1;
+}
+
+sub serve_package_details($c) {
+   return undef unless $c->check_branch_exists;
    $c->render_gzipped($c->archive_tree->package_details_blob->content, '02packages.details.txt.gz');
 }
 
 sub serve_author_file($c) {
+   return undef unless $c->check_branch_exists;
    my $path= 'authors/id/'.$c->stash->{author_path};
    # cpanm adds extra '/' when the path name doesn't match the expected A/AU/AUTHOR format
    $path =~ s,//+,/,g;

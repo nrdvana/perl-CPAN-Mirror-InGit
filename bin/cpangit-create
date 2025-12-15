@@ -7,11 +7,12 @@ use CPAN::InGit;
 use Git::Raw::Branch;
 use Getopt::Long;
 use Pod::Usage;
+use Log::Any::Adapter 'Stdout', log_level => 'debug';
 
 =head1 USAGE
 
-  cpangit-newarchive --upstream=URL BRANCH_NAME
-  cpangit-newarchive --from=BRANCH [--from=BRANCH2 ...] BRANCH_NAME
+  cpangit-create --upstream=URL BRANCH_NAME
+  cpangit-create --from=BRANCH [--from=BRANCH2 ...] BRANCH_NAME
 
 Create a new Archive branch.  If you specify C<--upstream>, it automatically pulls from the
 remote URL as needed and acts like a local cache of the remote archive.  If you specify
@@ -43,33 +44,22 @@ Set a default source branch to import new moduels from.
 
 GetOptions(
    'repo=s'     => \my $repo_path,
-   'from=s'     => \my @source_branches,
+   'from=s'     => \my @sources,
    'upstream=s' => \my $upstream_url,
    'help'       => sub { pod2usage(1) },
 ) && @ARGV == 1 or pod2usage(2);
 
 pod2usage(-message => "Specify only --from or --upstream, not both", -exit => 2)
-   if defined $upstream_url && @source_branches;
+   if defined $upstream_url && @sources;
 
 my $branch_name= shift;
 
-$repo_path //= getcwd;
-unless (-d $repo_path && -d "$repo_path/objects" && -f "$repo_path/config") {
-   # walk up directories until we find ".git"
-   my $path= $repo_path;
-   while (length $path && !-d "$path/.git") {
-      $path =~ s,[^/]+\z,,;
-      $path =~ s,/\z,,;
-   }
-   length $path
-      or die "$repo_path does not appear to be a git dir, and no parent contains '.git'";
-}
-
 { # scope to help run destructors in the right order
-   my $cpan_repo= CPAN::InGit->new(repo => $repo_path);
-   $cpan_repo->create_mirror($branch_name,
+   my $git_repo= Git::Raw::Repository->discover($repo_path // getcwd);
+   my $cpan_repo= CPAN::InGit->new(git_repo => $git_repo);
+   $cpan_repo->create_archive_tree($branch_name,
       upstream_url => $upstream_url,
-      source_branches => \@source_branches,
+      default_import_sources => \@sources,
    );
 }
 exit 0;
