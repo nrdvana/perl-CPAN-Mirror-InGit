@@ -91,8 +91,8 @@ subtest package_details => sub {
       branch => Git::Raw::Branch->lookup($git_repo, 'test', 1),
    );
    is( $atree, object {
-      call config => { corelist_perl_version => '5.16', default_import_sources => [] };
-      call corelist_perl_version  => '5.16';
+      call config => { corelist_perl_version => '5.016', default_import_sources => [] };
+      call corelist_perl_version  => '5.016';
       call default_import_sources => [];
       call package_details => {
          last_update => object { call epoch => 1763594941; },
