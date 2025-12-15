@@ -1,4 +1,8 @@
 package CPAN::InGit;
+
+# VERSION
+# ABSTRACT: Manage custom CPAN trees to pin versions for your projects
+
 use Git::Raw::Repository;
 use Archive::Tar;
 use Archive::Tar::Constant; # for constants to be avilable at compile time

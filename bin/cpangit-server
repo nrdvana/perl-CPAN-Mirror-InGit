@@ -1,4 +1,8 @@
 #! /usr/bin/env perl
+# PODNAME: cpangit-server
+# VERSION
+# ABSTRACT: serve a CPAN tree from a git branch, or all CPAN trees in the git repo
+
 use FindBin;
 BEGIN { push @INC, "$FindBin::RealBin/../lib" if -f "$FindBin::RealBin/../dist.ini" }
 use Mojolicious::Lite;

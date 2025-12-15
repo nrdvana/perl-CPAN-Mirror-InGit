@@ -1,4 +1,8 @@
 #! /usr/bin/env perl
+# PODNAME: cpangit-add
+# VERSION
+# ABSTRACT: import CPAN packages to local CPAN trees
+
 use v5.36;
 use FindBin;
 BEGIN { push @INC, "$FindBin::RealBin/../lib" if -f "$FindBin::RealBin/../dist.ini" }
@@ -7,6 +11,10 @@ use CPAN::InGit;
 use Getopt::Long;
 use Pod::Usage;
 use Log::Any::Adapter 'Stdout', log_level => 'info';
+
+=head1 NAME
+
+  cpangit-add
 
 =head1 USAGE
 

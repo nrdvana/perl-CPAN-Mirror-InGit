@@ -1,5 +1,6 @@
 package CPAN::InGit::MutableTree;
 # ABSTRACT: Utility object that represents a Git Tree and pending changes
+# VERSION
 
 =head1 SYNOPSIS
 

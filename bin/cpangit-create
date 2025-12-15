@@ -1,4 +1,8 @@
 #! /usr/bin/env perl
+# PODNAME: cpangit-create
+# VERSION
+# ABSTRACT: create git branches for custom CPAN trees
+
 use v5.36;
 use FindBin;
 BEGIN { push @INC, "$FindBin::RealBin/../lib" if -f "$FindBin::RealBin/../dist.ini" }
