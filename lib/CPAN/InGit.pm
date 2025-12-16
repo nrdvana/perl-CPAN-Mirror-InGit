@@ -69,6 +69,8 @@ Using the command line to do the same as above:
 
 =head1 DESCRIPTION
 
+B<WARNING> This module is in an early state of development, and the API is not final.
+
 C<CPAN::InGit> is a concept that instead of using Carton and a cpanfile.spanshot to request
 an exact list of modules for your project, you store the exact list in a Git repo and then serve
 that as a CPAN mirror to your CPAN client as if these are the only versions of modules that

@@ -1,2 +1,2 @@
-0.000_002 - 2025-12-16
-  - Fixed makefile to install bin/ scripts
+0.001 - 2025-12-16
+  - Initial mostly-usable release
