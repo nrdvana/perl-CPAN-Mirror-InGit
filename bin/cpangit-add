@@ -41,14 +41,14 @@ current directory by default.
 Branch name to commit the changes to.  If this is the checked-out branch, the index will be
 updated but no commit will be generated.
 
+=back
+
 =cut
 
 my $log_level= Log::Any::Adapter::Util::numeric_level('info');
 GetOptions(
    'repo=s'     => \my $repo_path,
    'branch=s'   => \my $branch_name,
-   'create'     => \my $create,
-   'upstream=s' => \my @upstream,
    'verbose|v'  => sub { ++$log_level },
    'quiet|q'    => sub { --$log_level if $log_level },
    'help'       => sub { pod2usage(1) },
@@ -96,5 +96,8 @@ while (@ARGV) {
    }
 
    $atree->import_modules(\%requirements);
+   # If this is not the working branch, also need to commit it
+   $atree->commit("Imported modules:\n".join('', map "  - $_\n", sort keys %requirements))
+      unless $atree->use_workdir;
 }
 exit 0;

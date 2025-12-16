@@ -17,16 +17,68 @@ use v5.36;
 
 =head1 SYNOPSIS
 
-  my $cpan_repo= CPAN::InGit->new(repo => $path_to_git_repo);
-  my $mirror_tree= $cpan_repo->branch_mirror($git_branch_name);
-  # (all interesting methods are found on Mirror objects)
+Using the module:
+
+  my $git_repo= Git::Raw::Repository->discover($repo_path // getcwd);
+  my $cpan_repo= CPAN::InGit->new(git_repo => $git_repo);
+  
+  # Create a mirror of public CPAN
+  # Setting "upstream_url" creates a partial mirror which advertises all
+  # current public CPAN versions of modules, and fetches dists on demand
+  # and commits them to that branch, as a cache.
+  $cpan_repo->create_archive_tree('www_cpan_org', upstream_url => 'https://www.cpan.org');
+  
+  # Create a branch to be the per-application tree of modules.  Configure
+  # it to "import_modules" from branch "www_cpan_org".
+  $cpan_repo->create_archive_tree('my_app',
+    default_import_sources => ['www_cpan_org'],
+    corelist_perl_version => '5.026003',
+  );
+  
+  # This pulls modules Catalyst and DBIx::Class from the www_cpan_org branch
+  # (which fetches and commits on demand) and then adds them to the package
+  # index of branch 'my_app'.
+  my $app_pan= $cpan_repo->get_archive_tree('my_app');
+  $app_pan->import_modules({
+    'Catalyst' => 0,
+    'DBIx::Class' => 0,
+  });
+  
+  # Commit the changes to branch 'my_app'
+  $app_pan->commit("Added Catalyst and DBIx::Class");
+  
+  # This only pulls Log::Any, because the versions of Catalyst and DBIx::Class
+  # are already satisfied, even if new versions of DBIx::Class were available,
+  # and even if those new versions were in branch 'www_cpan_org'.
+  # The versions are pinned until you request a newer version.
+  $app_pan->import_modules({
+    'Catalyst' => 0,
+    'DBIx::Class' => 0,
+ it's hard to say anything about th    'Log::Any' => 1,
+  });
+  
+Using the command line to do the same as above:
+
+  mkdir localpan && cd localpan && git init
+  cpangit-create --upstream_url=https://www.cpan.org www_cpan_org
+  cpangit-create --from=www_cpan_org my_app
+  cpangit-add --branch=my_app Catalyst DBIx::Class
+  cpangit-add --branch=my_app Catalyst DBIx::Class Log::Any
+  cpangit-server -l http://localhost:3000 &
+  cpanm -M http://localhost:3000/my_app/ Catalyst DBIx::Class
 
 =head1 DESCRIPTION
 
-C<CPAN::InGit> is a concept that your entire CPAN mirror (or maybe more correctly a
-DarkPAN) lives within a Git repository.  You designate a branch for each of your perl
-environments (such as one branch per application) and that branch contains B<ONLY> the dist
-tarballs used by that project, and an index of the packages within.
+C<CPAN::InGit> is a concept that instead of using Carton and a cpanfile.spanshot to request
+an exact list of modules for your project, you store the exact list in a Git repo and then serve
+that as a CPAN mirror to your CPAN client as if these are the only versions of modules that
+exist.  You can then use any CPAN client you like without fussing with where it will install the
+modules or how it will decide when to upgrade versions of dependencies.
+
+Eventually, I plan to have functionality to help "curate" a collection of CPAN modules, such as
+applying patches for known issues in modules, ensuring application branches upgrade to those
+patched versions, upgrading back to the public CPAN verison when the fix gets picked up by the
+primary author, or identifying when dependencies have CVEs that require an upgrade.
 
 =head3 Features
 
@@ -34,56 +86,53 @@ tarballs used by that project, and an index of the packages within.
 
 =item *
 
-It's your own private CPAN (DarkPAN) with all the benefits that entails.  (such as private
-dists or patching public dists)
+It's your own private CPAN (DarkPAN) with all the benefits that entails.
+(such as private distributions or patching public distributions)
 
 =item *
 
-The data is stored in Git, so it's version controlled and compressed.  This module reads
-directly from the Git repo storage without needing a checkout.
+By hosting CPAN modules on your own infrastructure, you can avoid hammering public CPAN with
+your CI/CD builds every time you push a commit.
+
+=item *
+
+The data is stored in Git, so it's version controlled and compressed.
+You can revert to a previous environment for your application with a simple "git revert".
 
 =item *
 
 The server serves each B<branch> as its own mirror URL, so it's actually like an unlimited
-number of DarkPANs hosted on the same server.  Each branch indexes only the dist files you
-have added to that branch, and only one version per dist.
+number of DarkPANs hosted on the same server.  You can reference the server sub-path with
+your project's Dockerfile like C<< cpanm -M http://ingit-server.local/my_app_branch/ >>.
 
 =item *
 
-There is a web interface that helps you pull new versions of dists from public CPAN, review
-the changes and compare diffs of the module code, chain-pull new dependencies, and commit the
-new dist versions into a branch.  The web interface also helps you apply patches to public
-dists and maintains the history of those patches.
+This module reads directly from the Git repo storage without needing a checkout.
+You can point the server at the same repository being hosted by
+L<Gitea|https://about.gitea.com/products/gitea/>.
 
 =item *
 
-You can revert to a previous environment for your application with a simple "git revert".
-(or use the web interface)
-
-=item *
-
-Removes the need for cpanfile.snapshot or carton, because now the DarkPAN mirror is versioning
+Removes the need for cpanfile.snapshot or Carton, because now the DarkPAN mirror is versioning
 your environment for each application.
 
 =back
 
-=head1 ATTRIBUTES
-
-=head2 git_repo
+=attribute git_repo
 
 An instance of L<Git::Raw::Repository> (which wraps libgit2.so) for accessing the git structures.
 You can pass this attribute to the constructor as a simple directory path which gets inflated
 to a Repository object.
 
-=head2 git_author_name
+=attribute git_author_name
 
 Name used for commits generated by this library.  Defaults to 'CPAN::InGit'
 
-=head2 git_author_email
+=attribute git_author_email
 
 Email used for commits generated by this library.  Defaults to 'CPAN::InGit@localhost'
 
-=head2 useragent
+=attribute useragent
 
 The L<Mojo::UserAgent> object used when downloading files from the real CPAN.
 
@@ -117,9 +166,7 @@ sub _open_repo($thing) {
    return Git::Raw::Repository->open("$thing");
 }
 
-=head1 METHODS
-
-=head2 get_archive_tree
+=method get_archive_tree
 
   $mirror= $cpan_repo->get_archive_tree($branch_or_tag_or_id);
 
@@ -160,7 +207,7 @@ sub get_archive_tree($self, $branch_or_tag_or_id) {
    );
 }
 
-=head2 create_archive_tree
+=method create_archive_tree
 
   $mirror= $cpan_repo->create_archive_tree($branch_name, %params);
 
@@ -187,7 +234,7 @@ sub create_archive_tree($self, $name, %params) {
    return $t;
 }
 
-=head2 lookup_tree
+=method lookup_tree
 
   $tree= $cpan_repo->lookup_tree($branch_or_tag_or_commit);
   ($tree, $origin)= $cpan_repo->lookup_tree($branch_or_tag_or_commit);
@@ -230,7 +277,7 @@ sub lookup_tree($self, $branch_or_tag_or_id) {
    return wantarray? ($tree, $origin) : $tree;
 }
 
-=head2 add_git_tree_to_tar
+=method add_git_tree_to_tar
 
   $mirrorInGit->add_git_tree_to_tar($tar, $path, $tree);
 
@@ -239,7 +286,7 @@ calling L</add_git_dirent_to_tar> for each entry.  C<$path> provides the name fo
 of the tree within the archive.  C<undef> or empty string means the tree I<will be> the root of
 the archive.
 
-=head2 add_git_dirent_to_tar
+=method add_git_dirent_to_tar
 
   $mirrorInGit->add_git_dirent_to_tar($tar, $path, $dirent);
 
@@ -286,7 +333,7 @@ sub add_git_dirent_to_tar($self, $tar, $path, $dirent) {
    }
 }
 
-=head2 new_signature
+=method new_signature
 
 Returns a L<Git::Raw::Signature> that will be used for commits authored by this module.
 Signatures contain a timestamp, so the library generates new signatures frequently during
@@ -298,7 +345,7 @@ sub new_signature($self) {
    Git::Raw::Signature->now($self->git_author_name, $self->git_author_email);
 }
 
-=head2 lookup_versions
+=method lookup_versions
 
   $version_list= $cpan_repo->lookup_versions($module_name);
 
@@ -314,7 +361,7 @@ sub lookup_versions($self, $module_name) {
    }
 }
 
-=head2 process_distfile
+=method process_distfile
 
   my $index= $darkpan->process_distfile(
     tree      => $mirror_tree,
