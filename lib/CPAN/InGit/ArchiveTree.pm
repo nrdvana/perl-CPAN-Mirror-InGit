@@ -126,7 +126,7 @@ core distribution or whether it should be fetched from CPAN.
 
 has canonical_url          => ( is => 'rw' );
 has default_import_sources => ( is => 'rw' );
-has corelist_perl_version  => ( is => 'rw', default => '5.008000' );
+has corelist_perl_version  => ( is => 'rw', default => '5.008009' );
 
 =attribute package_details
 
@@ -407,7 +407,7 @@ sub import_modules($self, $reqs, %options) {
    require Module::CoreList;
    # None of our projects use older than 5.24, so no need to pull in dual-life modules
    # if perl 5.24 had a sufficient version.  Set this to match your oldest production perl.
-   my $perl_v= $options{corelist_perl_version} // $self->corelist_perl_version // '5.024';
+   my $perl_v= $options{corelist_perl_version} // $self->corelist_perl_version;
    my $corelist= Module::CoreList::find_version($perl_v);
    my $sources= $options{sources} // $self->default_import_sources;
    my $prereq_phases= [qw( configure build runtime test )];
