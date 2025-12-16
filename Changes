@@ -1,0 +1,2 @@
+0.000_002 - 2025-12-16
+  - Fixed makefile to install bin/ scripts
