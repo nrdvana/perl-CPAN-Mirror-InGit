@@ -139,7 +139,8 @@ sub mount($class, $base_route, $cpan_repo, %options) {
    $base_route= $base_route->to(namespace => '', controller => $class, cpan_repo => $cpan_repo, %options);
    my $tree_route= $atree? $base_route
       : $base_route->any('/:branch_name');
-   $tree_route->get('/modules/02packages.details.txt.gz')->to(action => 'serve_package_details');
+   $tree_route->get('/modules/02packages.details', [ format => ['txt','txt.gz'] ])
+      ->to(action => 'serve_package_details');
    $tree_route->get('/authors/id/*author_path')->to(action => 'serve_author_file');
 }
 
@@ -160,13 +161,17 @@ sub check_branch_exists($c) {
 
 =method serve_package_details
 
-Serve C<< modules/02packages.details.txt.gz >>.
+Serve C<< modules/02packages.details.txt[.gz] >>.
 
 =cut
 
 sub serve_package_details($c) {
    return undef unless $c->check_branch_exists;
-   $c->render_gzipped($c->archive_tree->package_details_blob->content, '02packages.details.txt.gz');
+   my $blob= $c->archive_tree->package_details_blob;
+   $c->respond_to(
+      txt      => sub { $c->render(text => $blob->content) },
+      'txt.gz' => sub { $c->render_gzipped($blob->content, '02packages.details.txt.gz') },
+   );
 }
 
 =method serve_author_file
