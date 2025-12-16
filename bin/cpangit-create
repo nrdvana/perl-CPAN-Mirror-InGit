@@ -6,7 +6,6 @@
 use v5.36;
 use FindBin;
 BEGIN { push @INC, "$FindBin::RealBin/../lib" if -f "$FindBin::RealBin/../dist.ini" }
-use Cwd;
 use CPAN::InGit;
 use Git::Raw::Branch;
 use Getopt::Long;
@@ -29,10 +28,10 @@ You can later edit the C<cpan_ingit.json> file to reconfigure a branch.
 
 =over
 
-=item --repo=PATH
+=item --git-dir=PATH
 
-Path to the Git repository of L<CPAN::InGit>.  Uses the C<.git> dir at or above the
-current directory by default.
+Path to the Git repository of L<CPAN::InGit>.  The default is GIT_DIR from the environment,
+or any git repo above "."
 
 =item --upstream=URL
 
@@ -47,7 +46,7 @@ Set a default source branch to import new moduels from.
 =cut
 
 GetOptions(
-   'repo=s'     => \my $repo_path,
+   'git-dir=s'  => \(my $git_dir= $ENV{GIT_DIR} // '.'),
    'from=s'     => \my @sources,
    'upstream=s' => \my $upstream_url,
    'help'       => sub { pod2usage(1) },
@@ -59,7 +58,7 @@ pod2usage(-message => "Specify only --from or --upstream, not both", -exit => 2)
 my $branch_name= shift;
 
 { # scope to help run destructors in the right order
-   my $git_repo= Git::Raw::Repository->discover($repo_path // getcwd);
+   my $git_repo= Git::Raw::Repository->discover($git_dir);
    my $cpan_repo= CPAN::InGit->new(git_repo => $git_repo);
    $cpan_repo->create_archive_tree($branch_name,
       upstream_url => $upstream_url,

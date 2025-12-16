@@ -6,7 +6,6 @@
 use v5.36;
 use FindBin;
 BEGIN { push @INC, "$FindBin::RealBin/../lib" if -f "$FindBin::RealBin/../dist.ini" }
-use Cwd;
 use CPAN::InGit;
 use Getopt::Long;
 use Pod::Usage;
@@ -31,10 +30,10 @@ the name of a perl module to fetch from upstream.
 
 =over
 
-=item --repo=PATH
+=item --git-dir=PATH
 
-Path to the Git repository of L<CPAN::InGit>.  Uses the C<.git> dir at or above the
-current directory by default.
+Path to the Git repository of L<CPAN::InGit>.  The default is GIT_DIR from the environment,
+or any git repo above "."
 
 =item --branch=BRANCH_NAME
 
@@ -47,7 +46,7 @@ updated but no commit will be generated.
 
 my $log_level= Log::Any::Adapter::Util::numeric_level('info');
 GetOptions(
-   'repo=s'     => \my $repo_path,
+   'git-dir=s'  => \(my $git_dir= $ENV{GIT_DIR} // '.'),
    'branch=s'   => \my $branch_name,
    'verbose|v'  => sub { ++$log_level },
    'quiet|q'    => sub { --$log_level if $log_level },
@@ -79,7 +78,7 @@ while (@ARGV) {
 }
 
 { # scope to help run destructors in the right order
-   my $git_repo= Git::Raw::Repository->discover($repo_path // getcwd);
+   my $git_repo= Git::Raw::Repository->discover($git_dir);
    my $cpan_repo= CPAN::InGit->new(git_repo => $git_repo);
    # If branch name is not provided, use HEAD.  But there must be a working copy.
    # If the branch name is the same as the one checked out, we need to modify the working

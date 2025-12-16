@@ -30,8 +30,8 @@ control how the server is launched, and are described by `mojo --help`.
 
 =item --git-dir=PATH
 
-Path to the Git repository of L<CPAN::InGit>.  Uses the C<.git> dir at or above the
-current directory by default.
+Path to the Git repository of L<CPAN::InGit>.  The default is GIT_DIR from the environment,
+or any git repo above "."
 
 =item --path-base=PATH  (-p PATH)
 
