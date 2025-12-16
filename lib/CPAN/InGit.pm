@@ -54,14 +54,14 @@ Using the module:
   $app_pan->import_modules({
     'Catalyst' => 0,
     'DBIx::Class' => 0,
- it's hard to say anything about th    'Log::Any' => 1,
+    'Log::Any' => 1,
   });
   
 Using the command line to do the same as above:
 
   mkdir localpan && cd localpan && git init
   cpangit-create --upstream_url=https://www.cpan.org www_cpan_org
-  cpangit-create --from=www_cpan_org my_app
+  cpangit-create --from=www_cpan_org --corelist=v5.26 my_app
   cpangit-add --branch=my_app Catalyst DBIx::Class
   cpangit-add --branch=my_app Catalyst DBIx::Class Log::Any
   cpangit-server -l http://localhost:3000 &
