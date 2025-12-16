@@ -10,6 +10,7 @@ use CPAN::InGit;
 use Git::Raw::Branch;
 use Getopt::Long;
 use Pod::Usage;
+use version;
 use Log::Any::Adapter 'Stdout', log_level => 'debug';
 
 =head1 USAGE
@@ -41,6 +42,11 @@ The URL of the upstream CPAN mirror
 
 Set a default source branch to import new moduels from.
 
+=item --corelist=PERL_VER
+
+Set a perl version from which to consult the CoreList to determine which modules are satisfied
+by your application's perl version.
+
 =back
 
 =cut
@@ -49,6 +55,7 @@ GetOptions(
    'git-dir=s'  => \(my $git_dir= $ENV{GIT_DIR} // '.'),
    'from=s'     => \my @sources,
    'upstream=s' => \my $upstream_url,
+   'corelist=s' => \my $corelist_ver,
    'help'       => sub { pod2usage(1) },
 ) && @ARGV == 1 or pod2usage(2);
 
@@ -60,9 +67,16 @@ my $branch_name= shift;
 { # scope to help run destructors in the right order
    my $git_repo= Git::Raw::Repository->discover($git_dir);
    my $cpan_repo= CPAN::InGit->new(git_repo => $git_repo);
+   if ($corelist_ver) {
+      # users are likely to specify "5.xx" when it needs to be "v5.xx" or "5.0xx000"
+      $corelist_ver= "v$1.$2"
+         if $corelist_ver =~ /^(\d)\.(\d\d)\z/;
+      $corelist_ver= version->parse($corelist_ver);
+   }
    $cpan_repo->create_archive_tree($branch_name,
-      upstream_url => $upstream_url,
-      default_import_sources => \@sources,
+      (upstream_url => $upstream_url)x!!$upstream_url,
+      (default_import_sources => \@sources)x!!@sources,
+      (corelist_perl_version => $corelist_ver)x!!$corelist_ver,
    );
 }
 exit 0;

@@ -96,7 +96,9 @@ sub _unpack_config($self, $config) {
 
 sub _pack_config($self, $config) {
    for (qw( default_import_sources corelist_perl_version canonical_url )) {
-      $config->{$_}= $self->$_;
+      my $val= $self->$_;
+      $val= "$val" if ref $val eq 'version';
+      $config->{$_}= $val;
    }
 }
 
@@ -404,11 +406,13 @@ sub _merge_prereqs($self, $reqs, $new_reqs) {
 }
 
 sub import_modules($self, $reqs, %options) {
+   # Determine what module versions were available for the app's version of perl.
    require Module::CoreList;
-   # None of our projects use older than 5.24, so no need to pull in dual-life modules
-   # if perl 5.24 had a sufficient version.  Set this to match your oldest production perl.
    my $perl_v= $options{corelist_perl_version} // $self->corelist_perl_version;
-   my $corelist= Module::CoreList::find_version($perl_v);
+   $perl_v= version->parse($perl_v)->numify;
+   my $corelist= Module::CoreList::find_version($perl_v)
+      or carp "No corelist for $perl_v";
+
    my $sources= $options{sources} // $self->default_import_sources;
    my $prereq_phases= [qw( configure build runtime test )];
    my $prereq_types=  [qw( requires )];
