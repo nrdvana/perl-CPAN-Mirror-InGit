@@ -301,7 +301,7 @@ The C<$path> is used for the destination name instead of C<< $dirent->name >>.
 sub add_git_tree_to_tar($self, $tar, $path, $tree) {
    unless ($tree->can('entries')) {
       my $id= $tree;
-      $tree = Git::Raw::Tree->lookup($self->repo, $id)
+      $tree = Git::Raw::Tree->lookup($self->git_repo, $id)
          or die "Can't find TREE $id referenced by '$path'";
    }
    $self->add_git_dirent_to_tar($tar, "$path/".$_->name, $_)
@@ -311,7 +311,7 @@ sub add_git_tree_to_tar($self, $tar, $path, $tree) {
 sub add_git_dirent_to_tar($self, $tar, $path, $dirent) {
    if ($dirent->type == Git::Raw::Object::BLOB()) {
       my $mode = $dirent->file_mode;
-      my $blob = Git::Raw::Blob->lookup($self->repo, $dirent->id)
+      my $blob = Git::Raw::Blob->lookup($self->git_repo, $dirent->id)
          or die "Can't find BLOB ".$dirent->id." referenced by '$path'";
       # Check if it's a symlink (mode 0120000 or 40960 decimal)
       if (($mode & 0170000) == 0120000) {
