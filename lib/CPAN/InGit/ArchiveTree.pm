@@ -217,7 +217,7 @@ sub write_package_details($self) {
       
       END
    # List can be huge, so try to be efficient about stringifying it
-   @mod_list= sort { $a->[0] cmp $b->[0] } @mod_list;
+   @mod_list= sort { fc $a->[0] cmp fc $b->[0] } @mod_list;
    my @lines;
    for (@mod_list) {
       push @lines, sprintf("%s %s  %s\n", $_->[0], $_->[1] // 'undef', $_->[2]);
