@@ -26,6 +26,15 @@ extends 'CPAN::InGit::ArchiveTree';
 
 This is the base URL from which files will be fetched.
 
+=attribute upstream_backup_url
+
+This is a fallback URL for if the primary URL lacks a distribution file.  The backup url is
+presumed to have the exact same distribution files as the primary URL, but a longer history of
+them.  The package index of the backup URL is never used.
+
+If the primary URL is C<< http://www.cpan.org >> then this will default to
+C<< https://backpan.perl.org >>.
+
 =attribute autofetch
 
 If enabled, attempts to access author files which exist on the L</upstream_url> and not locally
@@ -40,16 +49,18 @@ Defaults to one day (86400).  This only has an effect when C<autofetch> is enabl
 =cut
 
 has upstream_url            => ( is => 'rw', coerce => \&_add_trailing_slash );
+has upstream_backup_url     => ( is => 'rw', coerce => \&_add_trailing_slash );
 has autofetch               => ( is => 'rw', default => 1 );
 has package_details_max_age => ( is => 'rw', default => 86400 );
 
 sub _add_trailing_slash {
    my $x= shift;
-   $x =~ s{/?\z}{/}r
+   defined $x? $x =~ s{/?\z}{/}r : $x
 }
 
 sub _pack_config($self, $config) {
    $config->{upstream_url}= $self->upstream_url;
+   $config->{upstream_backup_url}= $self->upstream_backup_url;
    $config->{autofetch}= $self->autofetch;
    $config->{package_details_max_age}= $self->package_details_max_age;
    $self->next::method($config);
@@ -57,6 +68,9 @@ sub _pack_config($self, $config) {
 sub _unpack_config($self, $config) {
    $self->next::method($config);
    $self->upstream_url($config->{upstream_url});
+   $self->upstream_backup_url(exists $config->{upstream_backup_url}? $config->{upstream_backup_url}
+                             :($config->{upstream_url}||'') =~ m{^(https?)://www\.cpan\.org}? "$1://backpan.perl.org"
+                             : undef);
    $self->autofetch($config->{autofetch});
    $self->package_details_max_age($config->{package_details_max_age});
 }
@@ -115,6 +129,13 @@ sub fetch_upstream_file($self, $path, %options) {
    my $tx= $self->parent->useragent->get($url);
    $log->debugf(" GET %s -> %s %s", $url, $tx->result->code, $tx->result->message);
    unless ($tx->result->is_success) {
+      if ($self->upstream_backup_url && $path =~ m{^authors/id/}) {
+         my $url2= $self->upstream_backup_url . $path;
+         my $tx2= $self->parent->useragent->get($url2);
+         $log->debugf(" GET %s -> %s %s", $url2, $tx2->result->code, $tx2->result->message);
+         return \$tx2->result->body
+            if $tx2->result->is_success;
+      }
       return undef if $options{undef_if_404} && $tx->result->code == 404;
       croak "Failed to find file upstream: ".$tx->result->message;
    }
