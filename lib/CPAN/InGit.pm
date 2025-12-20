@@ -460,4 +460,47 @@ sub process_distfile($self, %opts) {
    }
 }
 
+sub _context {
+   my $context= substr($_, pos($_), $_[0]);
+   $context =~ s/\r/\\r/g;
+   $context =~ s/\n/\\n/g;
+   return $context;
+}
+sub parse_cpanfile_snapshot($self, $text) {
+   # TODO: use official module if available, else fall back to this:
+   my %distributions;
+   local $_= $text;
+   unless (eval {
+      /^# carton snapshot format: version 1.0\r?\n/mgc
+         or die "Unsupported cpanfile.snapshot version\n";
+      /\GDISTRIBUTIONS\r?\n/gc
+         or die "expected DISTRIBUTIONS\n";
+      while (length > pos) {
+         my ($dist_name)= /\G  (\S+)\r?\n/gc
+            or die "expected dist name\n";
+         my $dist= $distributions{$dist_name}= {};
+         while (/\G    (\w[^\r\n:]*): *(.*?)\r?\n/gc) {
+            my ($attr, $val)= ($1, $2);
+            if (length $val) {
+               $dist->{$attr}= $val;
+            } else {
+               while (/\G      (.*)\r?\n/gc) {
+                  push @{ $dist->{$attr} }, $1;
+               }
+            }
+            die "Unexpected sub-element of $dist_name $attr\n"
+               if /\G      /gc;
+         }
+         die "Unexpected sub-element of $dist_name\n"
+            if /\G    /gc;
+      }
+      1;
+   }) {
+      chomp $@;
+      my $context= _context(20);
+      croak "syntax error: $@, near \"$context\"";
+   }
+   \%distributions;
+}
+
 1;
