@@ -56,10 +56,21 @@ GetOptions(
 Log::Any::Adapter->set('Stdout', log_level => $log_level);
 
 my %requirements;
+my %cpan_snapshot;
 
 while (@ARGV) {
-   if ($ARGV[0] =~ m,/,) {
-      die "cpanfile not supported yet";
+   if ($ARGV[0] =~ m,/, or $ARGV[0] eq 'cpanfile' or $ARGV[0] eq 'cpanfile.snapshot') {
+      my $path= shift;
+      # load content
+      my $content= do { open my $fh, '<', $path or die "open($path): $!"; local $/; <$fh> };
+      # detect format
+      if ($content =~ /^# carton snapshot/) {
+         %cpan_snapshot= ( %cpan_snapshot, %{ CPAN::InGit->parse_cpanfile_snapshot($content) } );
+      } elsif ($content =~ /^ *requires +\S/m) {
+         ...
+      } else {
+         die "Unrecognized format in file '$path'";
+      }
    }
    elsif ($ARGV[0] =~ /^\w+(::\w+)*\z/) {
       my $mod_name= shift;
@@ -94,9 +105,16 @@ while (@ARGV) {
       die "No tree named '$branch_name'";
    }
 
-   $atree->import_modules(\%requirements);
+   my %imported_dists;
+   %imported_dists= %{ $atree->import_cpanfile_snapshot(\%cpan_snapshot) }
+      if keys %cpan_snapshot;
+   %imported_dists= ( %imported_dists, %{ $atree->import_modules(\%requirements) } )
+      if keys %requirements;
    # If this is not the working branch, also need to commit it
-   $atree->commit("Imported modules:\n".join('', map "  - $_\n", sort keys %requirements))
-      unless $atree->use_workdir;
+   unless ($atree->use_workdir) {
+      # TODO: smarter choice of commit title
+      my $title= "Imported modules";
+      $atree->commit("$title\n\nImported modules:\n".join('', map "  - $_\n", sort keys %imported_dists))
+   }
 }
 exit 0;

@@ -273,7 +273,7 @@ sub get_module_dist($self, $mod_name) {
 
 =method meta_path_for_dist
 
-  $author_path= $atree->meta_path_for_dist($author_path);
+  $author_path= $archive_tree->meta_path_for_dist($author_path);
 
 Return the author path for the .meta file corresponding with the distribution at an author path.
 This is just a simple replacement of file extension that accounts for some special cases.
@@ -344,10 +344,14 @@ sub get_dist_meta($self, $author_path, %options) {
 
 =method import_modules
 
-  $snapshot->import_modules(\%module_version_spec);
   # {
   #   'Example::Module' => '>=0.011',
   #   'Some::Module'    => '',   # any version
+  # }
+  my $imported= $archive_tree->import_modules(\%module_version_spec);
+  # {
+  #   'A/AU/AUTHOR/Example-Module-1.2.3.tar.gz' => $from_source,
+  #   ...
   # }
 
 This method processes a list of module requirements to pull in matching modules and only as many
@@ -412,6 +416,7 @@ sub import_modules($self, $reqs, %options) {
    $perl_v= version->parse($perl_v)->numify;
    my $corelist= Module::CoreList::find_version($perl_v)
       or carp "No corelist for $perl_v";
+   my %imported_dists;
 
    my $sources= $options{sources} // $self->default_import_sources;
    my $prereq_phases= [qw( configure build runtime test )];
@@ -460,6 +465,7 @@ sub import_modules($self, $reqs, %options) {
             $self->import_dist($peer, $author_path);
             my $meta= $self->get_dist_meta($author_path);
             $prereqs= $meta->effective_prereqs if $meta;
+            $imported_dists{$author_path}= $peer;
             last;
          }
       }
@@ -502,6 +508,87 @@ sub import_modules($self, $reqs, %options) {
          '';
       $mirror->commit($message);
    }
+   return \%imported_dists;
+}
+
+=method import_cpanfile_snapshot
+
+  $archive_tree->import_cpanfile_snapshot(\%distribution_spec);
+
+This function takes a data structure from a cpanfile.snapshot (parsed via
+L<CPAN::InGit/parse_cpanfile_snapshot> ) and fetches the exact distribution files listed, and
+writes all the "provides" information into the L</package_details>.
+
+This does not check any of the 'requires', on the assumption that the snapshot represents a
+complete package collection.
+
+=cut
+
+sub import_cpanfile_snapshot($self, $snapshot_spec, %options) {
+   my $sources= $options{sources} // $self->default_import_sources;
+   $sources && @$sources
+      or croak "No import sources specified";
+   my %imported_dists;
+   # coerce every source name to an ArchiveTree object
+   my @autocommit;
+   for (@$sources) {
+      unless (ref $_ and $_->can('package_details')) {
+         my $t= $self->parent->get_archive_tree($_)
+            or croak "No such archive tree $_";
+         # If we've created new objects for MirrorTree and the MirrorTree has autofetch
+         # enabled, then we also need to commit those changes before returning.
+         push @autocommit, $t if $t->can('autofetch') && $t->autofetch;
+         $_= $t;
+      }
+   }
+   dist: for my $dist_name (sort keys %$snapshot_spec) {
+      my $dist_info= $snapshot_spec->{$dist_name};
+      # Locate 'pathname'
+      my $author_path= $dist_info->{pathname};
+      unless ($author_path) {
+         my $msg= "Dist $dist_name lacks 'pathname' attribute";
+         $options{partial}? $log->notice($msg) : croak $msg;
+         next;
+      }
+      # Which source has this file?
+      for my $source (@$sources) {
+         $log->debugf("check %s for %s", $source->name, $author_path);
+         my $distfile_ent= $source->get_path("authors/id/$author_path")
+            or next;
+         $self->import_dist($source, $author_path);
+         $imported_dists{$author_path}= $source;
+         # Update index with the modules provided by this distribution if it wasn't imported
+         # from $source by import_dist.
+         if (!$source->package_details->{by_dist}{$author_path}) {
+            # Fall back to the 'provides' from the cpanfile.snapshot
+            if (ref $dist_info->{provides} eq 'HASH') {
+               my @mod_index= map [ $_, $dist_info->{provides}{$_}, $author_path ],
+                  keys %{$dist_info->{provides}};
+               $self->package_details->{by_dist}{$author_path}= \@mod_index;
+               $self->package_details->{by_module}{$_->[0]}= $_
+                  for @mod_index;
+               $self->write_package_details;
+            } else {
+               my $msg= "Snapshot lacks 'provides' for $dist_name, and not indexed in ".$source->name." either";
+               $options{partial}? $log->notice($msg) : croak $msg;
+            }
+         }
+         next dist;
+      }
+      my $msg= "No source contains file $author_path";
+      $options{partial}? $log->notice($msg) : croak $msg;
+   }
+   # If any sources are 'autofetch' and caller didn't supply the MirrorTree object,
+   # commit the changes before returning.
+   for my $mirror (grep $_->has_changes, @autocommit) {
+      my $message= join "\n",
+         'Auto-commit packages fetched for branch '.$self->name,
+         '',
+         'For $archive_tree->import_cpanfile_snapshot',
+         '';
+      $mirror->commit($message);
+   }
+   return \%imported_dists;
 }
 
 1;

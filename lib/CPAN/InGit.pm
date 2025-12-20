@@ -460,6 +460,29 @@ sub process_distfile($self, %opts) {
    }
 }
 
+=method parse_cpanfile_snapshot
+
+  $distribution_spec= $cpan_repo->parse_cpanfile_snapshot($file_contents);
+
+Given a scalar with the content of a cpanfile.snapshot from L<Carton>, this returns the data of
+that file as a hierarchial structure:
+
+  {
+    "Distribution-Name-1.002003" => {
+      "pathname" => "A/AU/AUTHOR/Distribution-Name-1.002003.tar.gz",
+      "provides" => {
+        "Distribution::Name" => '1.002003',
+        ...
+      },
+      "requirements" => {
+        "Dependency" => "2.05",
+        ...
+      }
+    }
+  }
+
+=cut
+
 sub _context {
    my $context= substr($_, pos($_), $_[0]);
    $context =~ s/\r/\\r/g;
@@ -493,6 +516,12 @@ sub parse_cpanfile_snapshot($self, $text) {
          }
          die "Unexpected sub-element of $dist_name\n"
             if /\G    /gc;
+         # convert 'provides' and 'requirements' to hashrefs of versions
+         for (qw( provides requirements )) {
+            if (ref $dist->{$_} eq 'ARRAY') {
+               $dist->{$_}= { map +((split ' ')[0,1]), @{$dist->{$_}} };
+            }
+         }
       }
       1;
    }) {
@@ -502,5 +531,32 @@ sub parse_cpanfile_snapshot($self, $text) {
    }
    \%distributions;
 }
+
+=head1 SEE ALSO
+
+=over
+
+=item L<Pinto>
+
+Pinto is the same idea (with larger scope) but implemented on a SQL Database.
+This necessitates a custom system of push/pull, user accounts, permissions, and so on.
+It's also fairly heavy on dependencies (Moose, DBIx::Class)
+
+=item L<App::opan>
+
+App::opan is quite similar in spirit, and stores the mirror as files that can be simply checked
+into version control.  It manages a list of pre-defined "PANs" like "upstream", "pinset",
+"custom"... each of which plays a role in managing modules for one app.
+There doesn't appear to be any concept for managing multiple apps or letting the server serve
+branches or an older snapshot of the combined 'PANs.
+
+=item L<CPAN::Mini::Inject>
+
+This builds on L<CPAN::Mini> to add inject custom files into a local tree that is mirroring
+public CPAN.
+
+=back
+
+=cut
 
 1;
