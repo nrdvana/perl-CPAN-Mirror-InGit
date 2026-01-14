@@ -536,12 +536,6 @@ sub _parse_cpanfile_snapshot($self, $text) {
 
 =over
 
-=item L<Pinto>
-
-Pinto is the same idea (with larger scope) but implemented on a SQL Database.
-This necessitates a custom system of push/pull, user accounts, permissions, and so on.
-It's also fairly heavy on dependencies (Moose, DBIx::Class)
-
 =item L<App::opan>
 
 App::opan is quite similar in spirit, and stores the mirror as files that can be simply checked
@@ -554,6 +548,20 @@ branches or an older snapshot of the combined 'PANs.
 
 This builds on L<CPAN::Mini> to add inject custom files into a local tree that is mirroring
 public CPAN.
+
+=item L<Pinto>
+
+Pinto is the same idea (with larger scope) but implemented on a SQL Database.
+This necessitates a custom system of push/pull, user accounts, permissions, and so on.
+It's also fairly heavy on dependencies (Moose, DBIx::Class)
+
+=item L<Carton>
+
+Carton is a system for installing perl modules and tracking all their versions and dependencies
+and storing that in a C<cpanfile.snapshot> so that the exact same modules can be installed on
+future runs.  Carton requires that all modules get installed into the local-lib directory (so it
+can't utilize system-installed perl libraries) and doesn't provide any way to patch CPAN modules
+before installing them.
 
 =back
 
