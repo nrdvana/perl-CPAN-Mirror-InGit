@@ -460,28 +460,28 @@ sub process_distfile($self, %opts) {
    }
 }
 
-=method parse_cpanfile_snapshot
-
-  $distribution_spec= $cpan_repo->parse_cpanfile_snapshot($file_contents);
-
-Given a scalar with the content of a cpanfile.snapshot from L<Carton>, this returns the data of
-that file as a hierarchial structure:
-
-  {
-    "Distribution-Name-1.002003" => {
-      "pathname" => "A/AU/AUTHOR/Distribution-Name-1.002003.tar.gz",
-      "provides" => {
-        "Distribution::Name" => '1.002003',
-        ...
-      },
-      "requirements" => {
-        "Dependency" => "2.05",
-        ...
-      }
-    }
-  }
-
-=cut
+#=method parse_cpanfile_snapshot
+#
+#  $distribution_spec= $cpan_repo->parse_cpanfile_snapshot($file_contents);
+#
+#Given a scalar with the content of a cpanfile.snapshot from L<Carton>, this returns the data of
+#that file as a hierarchial structure:
+#
+#  {
+#    "Distribution-Name-1.002003" => {
+#      "pathname" => "A/AU/AUTHOR/Distribution-Name-1.002003.tar.gz",
+#      "provides" => {
+#        "Distribution::Name" => '1.002003',
+#        ...
+#      },
+#      "requirements" => {
+#        "Dependency" => "2.05",
+#        ...
+#      }
+#    }
+#  }
+#
+#=cut
 
 sub _context {
    my $context= substr($_, pos($_), $_[0]);
@@ -489,7 +489,7 @@ sub _context {
    $context =~ s/\n/\\n/g;
    return $context;
 }
-sub parse_cpanfile_snapshot($self, $text) {
+sub _parse_cpanfile_snapshot($self, $text) {
    # TODO: use official module if available, else fall back to this:
    my %distributions;
    local $_= $text;

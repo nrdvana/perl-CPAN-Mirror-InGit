@@ -410,18 +410,10 @@ sub _merge_prereqs($self, $reqs, $new_reqs) {
 }
 
 sub import_modules($self, $reqs, %options) {
-   # Determine what module versions were available for the app's version of perl.
-   require Module::CoreList;
-   my $perl_v= $options{corelist_perl_version} // $self->corelist_perl_version;
-   $perl_v= version->parse($perl_v)->numify;
-   my $corelist= Module::CoreList::find_version($perl_v)
-      or carp "No corelist for $perl_v";
    my %imported_dists;
 
+   # Build list of source trees
    my $sources= $options{sources} // $self->default_import_sources;
-   my $prereq_phases= [qw( configure build runtime test )];
-   my $prereq_types=  [qw( requires )];
-   my $log_recommends= !grep $_ eq 'recommends', @$prereq_types;
    $sources && @$sources
       or croak "No import sources specified";
    # coerce every source name to an ArchiveTree object
@@ -436,10 +428,26 @@ sub import_modules($self, $reqs, %options) {
          $_= $t;
       }
    }
+
+   # Coerce the argument to a Requirements object
+   require CPAN::Meta::Requirements;
+   my $prereq_phases= [qw( configure build runtime test )];
+   my $prereq_types=  [qw( requires )];
+   my $log_recommends= !grep $_ eq 'recommends', @$prereq_types;
    my $recommended= CPAN::Meta::Requirements->new;
    # coerce the requirements into a CPAN::Meta::Requirements object
-   $reqs= CPAN::Meta::Requirements->from_string_hash($reqs)
-      if ref $reqs eq 'HASH';
+   $reqs= ref $reqs eq 'HASH'? CPAN::Meta::Requirements->from_string_hash($reqs)
+        : blessed($reqs) && $reqs->isa('CPAN::Meta::Requirements')? $reqs
+        : blessed($reqs) && $reqs->isa('CPAN::Meta::Prereqs')? $reqs->merged_requirements($prereq_phases, $prereq_types)
+        : croak "Expected CPAN::Meta::Requirements object, ::Prereqs object, or HASH ref";
+
+   # Determine what module versions were available for the app's version of perl.
+   require Module::CoreList;
+   my $perl_v= $options{corelist_perl_version} // $self->corelist_perl_version;
+   $perl_v= version->parse($perl_v)->numify;
+   my $corelist= Module::CoreList::find_version($perl_v)
+      or carp "No corelist for $perl_v";
+
    # Filter out the prereqs we already have, or which are in the corelist
    $log->tracef('todo reqs: %s', $reqs->as_string_hash);
    $self->_filter_prereqs($reqs, $corelist);
@@ -525,10 +533,11 @@ complete package collection.
 =cut
 
 sub import_cpanfile_snapshot($self, $snapshot_spec, %options) {
+   my %imported_dists;
+
    my $sources= $options{sources} // $self->default_import_sources;
    $sources && @$sources
       or croak "No import sources specified";
-   my %imported_dists;
    # coerce every source name to an ArchiveTree object
    my @autocommit;
    for (@$sources) {
@@ -541,6 +550,7 @@ sub import_cpanfile_snapshot($self, $snapshot_spec, %options) {
          $_= $t;
       }
    }
+
    dist: for my $dist_name (sort keys %$snapshot_spec) {
       my $dist_info= $snapshot_spec->{$dist_name};
       # Locate 'pathname'
