@@ -49,9 +49,15 @@ Defaults to one day (86400).  This only has an effect when C<autofetch> is enabl
 =cut
 
 has upstream_url            => ( is => 'rw', coerce => \&_add_trailing_slash );
-has upstream_backup_url     => ( is => 'rw', coerce => \&_add_trailing_slash );
+has upstream_backup_url     => ( is => 'rw', lazy => 1, builder => 1, coerce => \&_add_trailing_slash );
 has autofetch               => ( is => 'rw', default => 1 );
 has package_details_max_age => ( is => 'rw', default => 86400 );
+
+sub _build_upstream_backup_url($self) {
+   ($self->upstream_url||'') =~ m{^(https?)://www\.cpan\.org}
+      ? "$1://backpan.perl.org/"
+      : undef;
+}
 
 sub _add_trailing_slash {
    my $x= shift;
@@ -68,9 +74,8 @@ sub _pack_config($self, $config) {
 sub _unpack_config($self, $config) {
    $self->next::method($config);
    $self->upstream_url($config->{upstream_url});
-   $self->upstream_backup_url(exists $config->{upstream_backup_url}? $config->{upstream_backup_url}
-                             :($config->{upstream_url}||'') =~ m{^(https?)://www\.cpan\.org}? "$1://backpan.perl.org"
-                             : undef);
+   $self->upstream_backup_url($config->{upstream_backup_url})
+      if exists $config->{upstream_backup_url};
    $self->autofetch($config->{autofetch});
    $self->package_details_max_age($config->{package_details_max_age});
 }
