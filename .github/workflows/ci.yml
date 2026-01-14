@@ -19,38 +19,45 @@ jobs:
         with:
           perl-version: ${{ matrix.perl }}
       - name: Install deps
-        run: cpm install -g
+        run: >
+          sudo apt-get update
+          && sudo apt-get install -y --no-install-recommends libio-socket-ssl-perl libgit-raw-perl
+          libmoo-perl libmojolicious-perl libmodule-metadata-perl liblog-any-perl
+          liblog-any-adapter-tap-perl
+          && sudo rm -rf /var/lib/apt/lists/*
+          && (cpm install -g || cpm install -g --show-build-log-on-failure)
       - name: Build
         run: perl Makefile.PL
       - name: Test
         run: prove -lv
-  windows:
-    name: Windows latest Perl
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Perl
-        uses: shogo82148/actions-setup-perl@v1
-        with:
-          perl-version: 'latest'
-      - name: Install deps
-        run: cpm install -g
-      - name: Build
-        run: perl Makefile.PL
-      - name: Test
-        run: prove -lv
-  macos:
-    name: macOS latest Perl
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Perl
-        uses: shogo82148/actions-setup-perl@v1
-        with:
-          perl-version: 'latest'
-      - name: Install deps
-        run: cpm install -g
-      - name: Build
-        run: perl Makefile.PL
-      - name: Test
-        run: prove -lv
+  #windows:  Git::Raw doesn't compile on Windows currently
+  #  name: Windows latest Perl
+  #  runs-on: windows-latest
+  #  steps:
+  #    - uses: actions/checkout@v4
+  #    - name: Set up Perl
+  #      uses: shogo82148/actions-setup-perl@v1
+  #      with:
+  #        perl-version: 'latest'
+  #    - name: Install deps
+  #      run: (cpm install -g || cpm install -g --show-build-log-on-failure)
+  #    - name: Build
+  #      run: perl Makefile.PL
+  #    - name: Test
+  #      run: prove -lv
+  #macos:  Git::Raw also doesn't compile on MacOS
+  #  name: macOS latest Perl
+  #  runs-on: macos-latest
+  #  steps:
+  #    - uses: actions/checkout@v4
+  #    - name: Set up Perl
+  #      uses: shogo82148/actions-setup-perl@v1
+  #      with:
+  #        perl-version: 'latest'
+  #    - name: Install deps
+  #      run: (cpm install -g || cpm install -g --show-build-log-on-failure)
+  #    - name: Build
+  #      run: perl Makefile.PL
+  #    - name: Test
+  #      run: prove -lv
+  #
