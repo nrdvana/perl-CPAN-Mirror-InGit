@@ -109,15 +109,15 @@ for each module, which are relative to C<< /authors/id/ >>
 In CPAN::InGit, C<< /modules/02packages.details.txt >> is stored uncompressed, and
 gzipped as it is served.  Each author dist is stored as a .tar.gz file and a metadata file with
 extension .meta and may also optionally be unpacked at a directory of the same name minus the
-.tar.gz extension.  A special author "local" is used for custom overrides of upstream packages.
+.tar.gz extension.  A special author "LOCAL" is used for custom overrides of upstream packages.
 
 Summary:
 
   /:branch/modules/02packages.details.txt                 # index of the mirror
   /:branch/authors/id/D/DP/DPARIS/Crypt-DES-2.07.tar.gz   # copy of upstream
   /:branch/authors/id/D/DP/DPARIS/Crypt-DES-2.07.meta     # extracted metadata
-  /:branch/authors/id/local/Crypt-DES-2.07_01/...         # untarred customized dist
-  /:branch/authors/id/local/Crypt-DES-2.07_01.meta        # untarred customized dist's metadata
+  /:branch/authors/id/L/LO/LOCAL/Crypt-DES-2.07_01/...         # untarred customized dist
+  /:branch/authors/id/L/LO/LOCAL/Crypt-DES-2.07_01.meta        # untarred customized dist's metadata
 
 =head2 mount
 
