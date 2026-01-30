@@ -28,8 +28,8 @@ Using the module:
   # and commits them to that branch, as a cache.
   $cpan_repo->create_archive_tree('www_cpan_org', upstream_url => 'https://www.cpan.org');
   
-  # Create a branch to be the per-application tree of modules.  Configure
-  # it to "import_modules" from branch "www_cpan_org".
+  # Create a branch to be the per-application tree of modules.
+  # Configure it to "import_modules" from branch "www_cpan_org".
   $cpan_repo->create_archive_tree('my_app',
     default_import_sources => ['www_cpan_org'],
     corelist_perl_version => '5.026003',
@@ -47,9 +47,9 @@ Using the module:
   # Commit the changes to branch 'my_app'
   $app_pan->commit("Added Catalyst and DBIx::Class");
   
-  # This only pulls Log::Any, because the versions of Catalyst and DBIx::Class
-  # are already satisfied, even if new versions of DBIx::Class were available,
-  # and even if those new versions were in branch 'www_cpan_org'.
+  # This only pulls Log::Any because the versions of Catalyst and DBIx::Class
+  # are already satisfied, even if a new version of DBIx::Class is available,
+  # and even if a new version is indexed in branch 'www_cpan_org'.
   # The versions are pinned until you request a newer version.
   $app_pan->import_modules({
     'Catalyst' => 0,
@@ -546,7 +546,7 @@ branches or an older snapshot of the combined 'PANs.
 
 =item L<CPAN::Mini::Inject>
 
-This builds on L<CPAN::Mini> to add inject custom files into a local tree that is mirroring
+This builds on L<CPAN::Mini> to inject custom files into a local tree that is mirroring
 public CPAN.
 
 =item L<Pinto>
